@@ -1,8 +1,11 @@
-FreeBSD Source:
+FreeHugsBSD Source:
 ---------------
-This is the top level of the FreeBSD source directory.  This file
+
+**This is a fork of the FreeBSD kernel. All the same, but we do accept virtual hugs**
+
+This is the top level of the FreeHugsBSD source directory.  This file
 was last revised on:
-$FreeBSD$
+$FreeHugsBSD$
 
 For copyright information, please see the file COPYRIGHT in this
 directory (additional copyright information also exists for some
@@ -10,7 +13,7 @@ sources in this tree - please see the specific source directories for
 more information).
 
 The Makefile in this directory supports a number of targets for
-building components (or all) of the FreeBSD source tree.  See build(7)
+building components (or all) of the FreeHugsBSD source tree.  See build(7)
 and https://www.freebsd.org/doc/en_US.ISO8859-1/books/handbook/makeworld.html
 for more information, including setting make(1) variables.
 
