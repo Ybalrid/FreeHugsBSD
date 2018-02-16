@@ -1,7 +1,7 @@
 FreeHugsBSD Source:
 ---------------
 
-**This is a fork of the FreeBSD kernel. All the same, but we do accept virtual hugs**
+**This is a fork of the FreeBSD Operating System. All the same, but we do accept virtual hugs**
 
 This is the top level of the FreeHugsBSD source directory.  This file
 was last revised on:
