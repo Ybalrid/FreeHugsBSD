@@ -1,4 +1,4 @@
-This is the top level of the FreeBSD source directory.  This file
+This is the top level of the FreeHugsBSD source directory.  This file
 was last revised on:
 $FreeBSD$
 
@@ -81,6 +81,6 @@ usr.sbin	System administration commands.
 
 
 For information on synchronizing your source tree with one or more of
-the FreeBSD Project's development branches, please see:
+the FreeHugsBSD Project's development branches, please see:
 
   https://www.freebsd.org/doc/en_US.ISO8859-1/books/handbook/current-stable.html
