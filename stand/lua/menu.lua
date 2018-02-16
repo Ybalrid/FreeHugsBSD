@@ -53,8 +53,7 @@ menu.boot_options = {
 		entry_type = "return",
 		name = function()
 			return "Back to main menu"..color.highlight(" [Backspace]");
-		end,
-		alias = {"\08"}
+		end
 	},
 
 	-- load defaults
@@ -160,9 +159,9 @@ menu.welcome = {
 	{
 		entry_type = "return",
 		name = function()
-			return color.highlight("Esc").."ape to lua interpreter";
+			return color.highlight("Esc").."ape to loader prompt";
 		end,
-		alias = {"\027"}
+		alias = {core.KEYSTR_ESCAPE}
 	},
 
 	-- reboot
