@@ -218,6 +218,9 @@ menu.welcome = {
 
 			-- dynamically build the kernel menu:
 			local kernels = core.kernelList();
+			if #kernels == 0 then
+				return nil;
+			end
 			for k, v in ipairs(kernels) do
 				menu.kernel_options[#menu.kernel_options + 1] = {
 					entry_type = "entry",
@@ -273,9 +276,9 @@ function menu.run(m)
 		local key = io.getchar();
 
 		-- Special key behaviors
-		if (key == 127) and (m ~= menu.welcome) then
+		if (key == core.KEY_BACKSPACE) and (m ~= menu.welcome) then
 			break
-		elseif (key == 13) then
+		elseif (key == core.KEY_ENTER) then
 			core.boot();
 			-- Should not return
 		end
@@ -357,7 +360,7 @@ function menu.autoboot()
 		screen.defcursor();
 		if io.ischar() then
 			local ch = io.getchar();
-			if ch == 13 then
+			if ch == core.KEY_ENTER then
 				break;
 			else
 				-- prevent autoboot when escaping to interpreter
