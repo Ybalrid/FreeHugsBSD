@@ -213,8 +213,10 @@ menu.welcome = {
 			    " (" .. idx ..
 			    " of " .. #all_choices .. ")";
 		end,
-		func = function(choice)
-			config.reload(choice);
+		func = function(choice, all_choices)
+			if (#all_choices > 1) then
+				config.reload(choice);
+			end
 		end,
 		alias = {"k", "K"}
 	},
@@ -297,9 +299,12 @@ function menu.run(m)
 				local caridx = menu.getCarouselIndex(carid);
 				local choices = sel_entry.items();
 
-				caridx = (caridx % #choices) + 1;
-				menu.setCarouselIndex(carid, caridx);
-				sel_entry.func(choices[caridx]);
+				if (#choices > 0) then
+					caridx = (caridx % #choices) + 1;
+					menu.setCarouselIndex(carid, caridx);
+					sel_entry.func(choices[caridx],
+					    choices);
+				end
 			elseif (sel_entry.entry_type == core.MENU_SUBMENU) then
 				-- recurse
 				cont = menu.run(sel_entry.submenu());
