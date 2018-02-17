@@ -264,7 +264,7 @@ function menu.run(m)
 	screen.defcursor();
 	local alias_table = drawer.drawscreen(m);
 
---	menu.autoboot();
+	menu.autoboot();
 
 	cont = true;
 	while cont do
@@ -353,7 +353,9 @@ function menu.autoboot()
 	menu.already_autoboot = true;
 
 	local ab = loader.getenv("autoboot_delay");
-	if ab == "NO" or ab == "no" then
+	if (ab ~= nil) and (ab:lower() == "no") then
+		return;
+	elseif (tonumber(ab) == -1) then
 		core.boot();
 	end
 	ab = tonumber(ab) or 10;
@@ -375,8 +377,6 @@ function menu.autoboot()
 			if ch == core.KEY_ENTER then
 				break;
 			else
-				-- prevent autoboot when escaping to interpreter
-				loader.setenv("autoboot_delay", "NO");
 				-- erase autoboot msg
 				screen.setcursor(0, y);
 				print("                                        "
