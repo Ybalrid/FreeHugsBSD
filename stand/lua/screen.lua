@@ -26,10 +26,10 @@
 -- $FreeBSD$
 --
 
-local screen = {};
-
 local color = require("color");
 local core = require("core");
+
+local screen = {};
 
 -- XXX TODO: This should be fixed in the interpreter to not print decimals
 function intstring(num)
@@ -43,32 +43,32 @@ function intstring(num)
 end
 
 function screen.clear()
-	if (core.bootserial()) then
+	if (core.isSerialBoot()) then
 		return;
 	end
 	loader.printc("\027[H\027[J");
 end
 
 function screen.setcursor(x, y)
-	if (core.bootserial()) then
+	if (core.isSerialBoot()) then
 		return;
 	end
 
-	loader.printc("\027["..intstring(y)..";"..intstring(x).."H");
+	loader.printc("\027[" .. intstring(y) .. ";" .. intstring(x) .. "H");
 end
 
 function screen.setforeground(c)
 	if (color.disabled) then
 		return c;
 	end
-	loader.printc("\027[3"..c.."m");
+	loader.printc("\027[3" .. c .. "m");
 end
 
 function screen.setbackground(c)
 	if (color.disabled) then
 		return c;
 	end
-	loader.printc("\027[4"..c.."m");
+	loader.printc("\027[4" .. c .. "m");
 end
 
 function screen.defcolor()
@@ -76,7 +76,7 @@ function screen.defcolor()
 end
 
 function screen.defcursor()
-	if (core.bootserial()) then
+	if (core.isSerialBoot()) then
 		return;
 	end
 	loader.printc("\027[25;0H");

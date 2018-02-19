@@ -26,6 +26,8 @@
 -- $FreeBSD$
 --
 
+local config = require('config');
+
 local core = {};
 
 -- Commonly appearing constants
@@ -180,14 +182,21 @@ function core.setDefaults()
 end
 
 function core.autoboot()
+	config.loadelf();
 	loader.perform("autoboot");
 end
 
 function core.boot()
+	config.loadelf();
 	loader.perform("boot");
 end
 
-function core.bootserial()
+function core.isSingleUserBoot()
+	local single_user = loader.getenv("boot_single");
+	return single_user ~= nil and single_user:lower() == "yes";
+end
+
+function core.isSerialBoot()
 	local c = loader.getenv("console");
 
 	if (c ~= nil) then
@@ -206,6 +215,19 @@ function core.bootserial()
 		return true;
 	end
 	return false;
+end
+
+-- This may be a better candidate for a 'utility' module.
+function core.shallowCopyTable(tbl)
+	local new_tbl = {};
+	for k, v in pairs(tbl) do
+		if (type(v) == "table") then
+			new_tbl[k] = core.shallowCopyTable(v);
+		else
+			new_tbl[k] = v;
+		end
+	end
+	return new_tbl;
 end
 
 core.setACPI(core.getACPIPresent(false));
