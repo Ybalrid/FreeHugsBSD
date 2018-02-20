@@ -36,12 +36,21 @@ local drawer = require("drawer");
 
 local menu = {};
 
-local OnOff;
 local skip;
 local run;
 local autoboot;
-local carousel_choices = {};
 
+local OnOff = function(str, b)
+	if (b) then
+		return str .. color.escapef(color.GREEN) .. "On" ..
+		    color.escapef(color.WHITE);
+	else
+		return str .. color.escapef(color.RED) .. "off" ..
+		    color.escapef(color.WHITE);
+	end
+end
+
+-- Module exports
 menu.handlers = {
 	-- Menu handlers take the current menu and selected entry as parameters,
 	-- and should return a boolean indicating whether execution should
@@ -55,12 +64,12 @@ menu.handlers = {
 	[core.MENU_CAROUSEL_ENTRY] = function(current_menu, entry)
 		-- carousel (rotating) functionality
 		local carid = entry.carousel_id;
-		local caridx = menu.getCarouselIndex(carid);
+		local caridx = config.getCarouselIndex(carid);
 		local choices = entry.items();
 
 		if (#choices > 0) then
 			caridx = (caridx % #choices) + 1;
-			menu.setCarouselIndex(carid, caridx);
+			config.setCarouselIndex(carid, caridx);
 			entry.func(caridx, choices[caridx], choices);
 		end
 	end,
@@ -317,19 +326,6 @@ menu.welcome = {
 	},
 };
 
--- The first item in every carousel is always the default item.
-function menu.getCarouselIndex(id)
-	local val = carousel_choices[id];
-	if (val == nil) then
-		return 1;
-	end
-	return val;
-end
-
-function menu.setCarouselIndex(id, idx)
-	carousel_choices[id] = idx;
-end
-
 function menu.run(m)
 
 	if (menu.skip()) then
@@ -459,16 +455,6 @@ function menu.autoboot()
 	until time <= 0;
 	core.boot();
 
-end
-
-function OnOff(str, b)
-	if (b) then
-		return str .. color.escapef(color.GREEN) .. "On" ..
-		    color.escapef(color.WHITE);
-	else
-		return str .. color.escapef(color.RED) .. "off" ..
-		    color.escapef(color.WHITE);
-	end
 end
 
 return menu;
