@@ -430,18 +430,13 @@ function config.reload(file)
 end
 
 function config.loadelf()
-	local kernel = config.kernel_loaded or config.kernel_selected;
+	local kernel = config.kernel_selected or config.kernel_loaded;
 	local loaded = false;
 
 	print("Loading kernel...");
 	loaded = config.loadkernel(kernel);
 
 	if (not loaded) then
-		loaded = config.loadkernel();
-	end
-
-	if (not loaded) then
-		-- Ultimately failed to load kernel
 		print("Failed to load any kernel");
 		return;
 	end
