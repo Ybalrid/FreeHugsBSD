@@ -20,7 +20,7 @@ CSCOPE_ARCHDIR += x86
 .endif
 .endif
 
-HTAGSFLAGS+= -at `awk -F= '/^RELEASE *=/{release=$2}; END {print "FreeBSD", release, "kernel"}' < conf/newvers.sh`
+HTAGSFLAGS+= -at `awk -F= '/^RELEASE *=/{release=$2}; END {print "FreeHugsBSD", release, "kernel"}' < conf/newvers.sh`
 
 # You need the devel/cscope port for this.
 cscope: cscope.out
