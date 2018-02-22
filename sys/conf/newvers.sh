@@ -44,7 +44,7 @@
 #                      checkout from a version control system.  Metadata is
 #                      included if the tree is modified.
 
-TYPE="FreeBSD"
+TYPE="FreeHugsBSD"
 REVISION="12.0"
 BRANCH="CURRENT"
 if [ -n "${BRANCH_OVERRIDE}" ]; then
