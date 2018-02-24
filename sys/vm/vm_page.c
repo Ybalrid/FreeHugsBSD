@@ -430,6 +430,7 @@ vm_page_domain_init(int domain)
 		    MTX_DEF | MTX_DUPOK);
 	}
 	mtx_init(&vmd->vmd_free_mtx, "vm page free queue", NULL, MTX_DEF);
+	snprintf(vmd->vmd_name, sizeof(vmd->vmd_name), "%d", domain);
 }
 
 /*
@@ -3434,14 +3435,11 @@ vm_page_launder(vm_page_t m)
 	int queue;
 
 	vm_page_assert_locked(m);
-	if ((queue = m->queue) != PQ_LAUNDRY) {
-		if (m->wire_count == 0 && (m->oflags & VPO_UNMANAGED) == 0) {
-			if (queue != PQ_NONE)
-				vm_page_dequeue(m);
-			vm_page_enqueue(PQ_LAUNDRY, m);
-		} else
-			KASSERT(queue == PQ_NONE,
-			    ("wired page %p is queued", m));
+	if ((queue = m->queue) != PQ_LAUNDRY && m->wire_count == 0 &&
+	    (m->oflags & VPO_UNMANAGED) == 0) {
+		if (queue != PQ_NONE)
+			vm_page_dequeue(m);
+		vm_page_enqueue(PQ_LAUNDRY, m);
 	}
 }
 
