@@ -54,12 +54,6 @@
 #define ENDPOINT_IRQ_MASK(n)	0x30
 #define ENDPOINT_IRQ_MASK_HI(n)	0x34
 #define ENDPOINT_IRQ_CAUSE_SELECT 0x38
-#elif defined (SOC_MV_ARMADAXP)
-#define IRQ_CAUSE		0x18
-#define IRQ_MASK		0x30
-#elif defined (SOC_MV_ARMADA38X)
-#define	MSI_IRQ			0x3ff
-#define	ERR_IRQ			0x3ff
 #else
 #define IRQ_CAUSE		0x0
 #define IRQ_MASK		0x4
@@ -74,6 +68,14 @@
 #define IRQ_MASK_ERROR		(-1)		/* interrupt controller code */
 #endif
 
+#define MAIN_IRQ_NUM		116
+#define ERR_IRQ_NUM		32
+#define ERR_IRQ			(MAIN_IRQ_NUM)
+#define MSI_IRQ			(ERR_IRQ + ERR_IRQ_NUM)
+
+#define MSI_IRQ_NUM		32
+
+#define IRQ_CPU_SELF		0x00000001
 #if defined(SOC_MV_ARMADAXP)
 #define BRIDGE_IRQ_CAUSE	0x68
 #define IRQ_TIMER0		0x00000001
@@ -325,13 +327,10 @@
 #define SAMPLE_AT_RESET		0x10
 #elif defined(SOC_MV_KIRKWOOD)
 #define SAMPLE_AT_RESET		0x30
-#elif defined(SOC_MV_ARMADA38X)
-#define SAMPLE_AT_RESET		0x400
 #endif
-#if defined(SOC_MV_DISCOVERY) || defined(SOC_MV_ARMADAXP)
-#define SAMPLE_AT_RESET_LO	0x30
-#define SAMPLE_AT_RESET_HI	0x34
-#endif
+#define	SAMPLE_AT_RESET_ARMADA38X	0x400
+#define	SAMPLE_AT_RESET_LO		0x30
+#define	SAMPLE_AT_RESET_HI		0x34
 
 /*
  * Clocks
@@ -342,10 +341,10 @@
 #elif defined(SOC_MV_DISCOVERY)
 #define TCLK_MASK		0x00000180
 #define TCLK_SHIFT		0x07
-#elif defined(SOC_MV_ARMADA38X)
-#define TCLK_MASK		0x00008000
-#define TCLK_SHIFT		15
 #endif
+
+#define	TCLK_MASK_ARMADA38X		0x00008000
+#define	TCLK_SHIFT_ARMADA38X		15
 
 #define TCLK_100MHZ		100000000
 #define TCLK_125MHZ		125000000
