@@ -87,13 +87,13 @@
 #define IRQ_TIMER0		0x00000002
 #define IRQ_TIMER1		0x00000004
 #define IRQ_TIMER_WD		0x00000008
+#endif
 
 #define BRIDGE_IRQ_MASK		0x14
 #define IRQ_CPU_MASK		0x00000001
 #define IRQ_TIMER0_MASK		0x00000002
 #define IRQ_TIMER1_MASK		0x00000004
 #define IRQ_TIMER_WD_MASK	0x00000008
-#endif
 
 #define IRQ_CPU_SELF_CLR	(~IRQ_CPU_SELF)
 #define IRQ_TIMER0_CLR		(~IRQ_TIMER0)
@@ -105,20 +105,20 @@
  */
 #if defined(SOC_MV_ARMADAXP) || defined(SOC_MV_ARMADA38X)
 #define RSTOUTn_MASK		0x60
-#define	RSTOUTn_MASK_WD		0x400
 #define SYSTEM_SOFT_RESET	0x64
-#define WD_RSTOUTn_MASK		0x4
-#define WD_GLOBAL_MASK		0x00000100
-#define WD_CPU0_MASK		0x00000001
 #define SOFT_RST_OUT_EN		0x00000001
 #define SYS_SOFT_RST		0x00000001
 #else
 #define RSTOUTn_MASK		0x8
-#define WD_RST_OUT_EN		0x00000002
 #define SOFT_RST_OUT_EN		0x00000004
 #define SYSTEM_SOFT_RESET	0xc
 #define SYS_SOFT_RST		0x00000001
 #endif
+#define RSTOUTn_MASK_WD		0x400
+#define WD_RSTOUTn_MASK		0x4
+#define WD_GLOBAL_MASK		0x00000100
+#define WD_CPU0_MASK		0x00000001
+#define WD_RST_OUT_EN		0x00000002
 
 /*
  * Power Control
@@ -423,7 +423,6 @@
 /*
  * SCU
  */
-#if defined(SOC_MV_ARMADA38X)
 #define	MV_SCU_BASE		(MV_BASE + 0xc000)
 #define	MV_SCU_REGS_LEN		0x100
 #define	MV_SCU_REG_CTRL		0x00
@@ -431,30 +430,23 @@
 #define	MV_SCU_ENABLE		(1 << 0)
 #define	MV_SCU_SL_L2_ENABLE	(1 << 3)
 #define	SCU_CFG_REG_NCPU_MASK	0x3
-#endif
 
 /*
  * PMSU
  */
-#if defined(SOC_MV_ARMADA38X)
 #define	MV_PMSU_BASE		(MV_BASE + 0x22000)
 #define	MV_PMSU_REGS_LEN	0x1000
 #define	PMSU_BOOT_ADDR_REDIRECT_OFFSET(cpu)	(((cpu) * 0x100) + 0x124)
-#endif
 
 /*
  * CPU RESET
  */
-#if defined(SOC_MV_ARMADA38X)
 #define	MV_CPU_RESET_BASE	(MV_BASE + 0x20800)
 #define	MV_CPU_RESET_REGS_LEN	0x8
 #define	CPU_RESET_OFFSET(cpu)	((cpu) * 0x8)
 #define	CPU_RESET_ASSERT	0x1
-#endif
 
-#if defined(SOC_MV_ARMADA38X)
 #define	MV_MBUS_CTRL_BASE	(MV_BASE + 0x20420)
 #define	MV_MBUS_CTRL_REGS_LEN	0x10
-#endif
 
 #endif /* _MVREG_H_ */
