@@ -160,6 +160,8 @@ struct cache_info {
 
 unsigned int boot_address;
 
+#define MiB(v)	(v ## ULL << 20)
+
 void
 mem_range_AP_init(void)
 {
@@ -945,6 +947,7 @@ alloc_ap_trampoline(vm_paddr_t *physmap, unsigned int *physmap_idx)
 			    sizeof(*physmap) * (*physmap_idx - i + 2));
 			*physmap_idx -= 2;
 		}
+		break;
 	}
 
 	if (!allocated) {
