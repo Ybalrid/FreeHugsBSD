@@ -281,7 +281,7 @@ struct trapdebug trapdebug[TRAPSIZE], *trp = trapdebug;
 #endif
 
 #define	KERNLAND(x)	((vm_offset_t)(x) >= VM_MIN_KERNEL_ADDRESS && (vm_offset_t)(x) < VM_MAX_KERNEL_ADDRESS)
-#define	DELAYBRANCH(x)	((int)(x) < 0)
+#define	DELAYBRANCH(x)	((x) & MIPS_CR_BR_DELAY)
 
 /*
  * MIPS load/store access type
@@ -875,15 +875,12 @@ dofault:
 	case T_TRAP + T_USER:
 		{
 			intptr_t va;
-			uint32_t instr;
 			struct trapframe *locr0 = td->td_frame;
 
 			/* compute address of trap instruction */
 			va = trapframe->pc;
 			if (DELAYBRANCH(trapframe->cause))
 				va += sizeof(int);
-			/* read break instruction */
-			instr = fuword32((caddr_t)va);
 
 			if (DELAYBRANCH(trapframe->cause)) {	/* Check BD bit */
 				locr0->pc = MipsEmulateBranch(locr0, trapframe->pc, 0,
