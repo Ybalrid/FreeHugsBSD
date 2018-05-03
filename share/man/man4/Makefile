@@ -244,7 +244,6 @@ MAN=	aac.4 \
 	iwmfw.4 \
 	iwn.4 \
 	iwnfw.4 \
-	ixgb.4 \
 	ixgbe.4 \
 	ixl.4 \
 	ixlv.4 \
@@ -266,7 +265,6 @@ MAN=	aac.4 \
 	${_linux.4} \
 	liquidio.4 \
 	lm75.4 \
-	lmc.4 \
 	lo.4 \
 	lp.4 \
 	lpbb.4 \
@@ -479,7 +477,7 @@ MAN=	aac.4 \
 	sio.4 \
 	sis.4 \
 	sk.4 \
-	smartpqi.4 \
+	${_smartpqi.4} \
 	smb.4 \
 	smbus.4 \
 	smp.4 \
@@ -676,7 +674,6 @@ MLINKS+=ipw.4 if_ipw.4
 MLINKS+=iwi.4 if_iwi.4
 MLINKS+=iwm.4 if_iwm.4
 MLINKS+=iwn.4 if_iwn.4
-MLINKS+=ixgb.4 if_ixgb.4
 MLINKS+=ixgbe.4 ix.4
 MLINKS+=ixgbe.4 if_ix.4
 MLINKS+=ixgbe.4 if_ixgbe.4
@@ -688,7 +685,6 @@ MLINKS+=lagg.4 trunk.4
 MLINKS+=lagg.4 if_lagg.4
 MLINKS+=le.4 if_le.4
 MLINKS+=lge.4 if_lge.4
-MLINKS+=lmc.4 if_lmc.4
 MLINKS+=lo.4 loop.4
 MLINKS+=lp.4 plip.4
 MLINKS+=malo.4 if_malo.4
@@ -879,6 +875,7 @@ _qlxgb.4=	qlxgb.4
 _qlxgbe.4=	qlxgbe.4
 _qlnxe.4=	qlnxe.4
 _sfxge.4=	sfxge.4
+_smartpqi.4=	smartpqi.4
 
 MLINKS+=qlxge.4 if_qlxge.4
 MLINKS+=qlxgb.4 if_qlxgb.4
