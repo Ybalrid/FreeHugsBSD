@@ -4398,10 +4398,8 @@ iflib_device_register(device_t dev, void *sc, if_shared_ctx_t sctx, if_ctx_t *ct
 		goto fail;
 	}
 
-	if ((err = iflib_qset_structures_setup(ctx))) {
-		device_printf(dev, "qset structure setup failed %d\n", err);
+	if ((err = iflib_qset_structures_setup(ctx)))
 		goto fail_queues;
-	}
 
 	/*
 	 * Group taskqueues aren't properly set up until SMP is started,
@@ -4453,7 +4451,8 @@ fail_intr_free:
 	if (scctx->isc_intr == IFLIB_INTR_MSIX || scctx->isc_intr == IFLIB_INTR_MSI)
 		pci_release_msi(ctx->ifc_dev);
 fail_queues:
-	/* XXX free queues */
+	iflib_tx_structures_free(ctx);
+	iflib_rx_structures_free(ctx);
 fail:
 	IFDI_DETACH(ctx);
 	CTX_UNLOCK(ctx);
@@ -5065,14 +5064,18 @@ iflib_qset_structures_setup(if_ctx_t ctx)
 {
 	int err;
 
-	if ((err = iflib_tx_structures_setup(ctx)) != 0)
+	/*
+	 * It is expected that the caller takes care of freeing queues if this
+	 * fails.
+	 */
+	if ((err = iflib_tx_structures_setup(ctx)) != 0) {
+		device_printf(ctx->ifc_dev, "iflib_tx_structures_setup failed: %d\n", err);
 		return (err);
-
-	if ((err = iflib_rx_structures_setup(ctx)) != 0) {
-		device_printf(ctx->ifc_dev, "iflib_rx_structures_setup failed: %d\n", err);
-		iflib_tx_structures_free(ctx);
-		iflib_rx_structures_free(ctx);
 	}
+
+	if ((err = iflib_rx_structures_setup(ctx)) != 0)
+		device_printf(ctx->ifc_dev, "iflib_rx_structures_setup failed: %d\n", err);
+
 	return (err);
 }
 
