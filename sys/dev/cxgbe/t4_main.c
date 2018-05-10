@@ -455,7 +455,7 @@ TUNABLE_INT("hw.cxgbe.iscsicaps_allowed", &t4_iscsicaps_allowed);
 static int t4_fcoecaps_allowed = 0;
 TUNABLE_INT("hw.cxgbe.fcoecaps_allowed", &t4_fcoecaps_allowed);
 
-static int t5_write_combine = 1;
+static int t5_write_combine = 0;
 TUNABLE_INT("hw.cxl.write_combine", &t5_write_combine);
 
 static int t4_num_vis = 1;
@@ -2292,7 +2292,6 @@ t4_map_bar_2(struct adapter *sc)
 				setbit(&sc->doorbells, DOORBELL_WCWR);
 				setbit(&sc->doorbells, DOORBELL_UDBWC);
 			} else {
-				t5_write_combine = 0;
 				device_printf(sc->dev,
 				    "couldn't enable write combining: %d\n",
 				    rc);
@@ -2302,11 +2301,9 @@ t4_map_bar_2(struct adapter *sc)
 			t4_write_reg(sc, A_SGE_STAT_CFG,
 			    V_STATSOURCE_T5(7) | mode);
 		}
-#else
-		t5_write_combine = 0;
 #endif
-		sc->iwt.wc_en = t5_write_combine;
 	}
+	sc->iwt.wc_en = isset(&sc->doorbells, DOORBELL_UDBWC) ? 1 : 0;
 
 	return (0);
 }
@@ -3630,6 +3627,18 @@ get_params__post_init(struct adapter *sc)
 		sc->params.mps_bg_map = val[0];
 	else
 		sc->params.mps_bg_map = 0;
+
+	/*
+	 * Determine whether the firmware supports the filter2 work request.
+	 * This is queried separately for the same reason as MPSBGMAP above.
+	 */
+	param[0] = FW_PARAM_DEV(FILTER2_WR);
+	val[0] = 0;
+	rc = -t4_query_params(sc, sc->mbox, sc->pf, 0, 1, param, val);
+	if (rc == 0)
+		sc->params.filter2_wr_support = val[0] != 0;
+	else
+		sc->params.filter2_wr_support = 0;
 
 	/* get capabilites */
 	bzero(&caps, sizeof(caps));
