@@ -448,14 +448,19 @@ moea64_bootstrap_native(mmu_t mmup, vm_offset_t kernelstart,
 		moea64_part_table =
 		    (struct pate *)moea64_bootstrap_alloc(PART_SIZE, PART_SIZE);
 		if (hw_direct_map)
-			moea64_part_table =
-			    (struct pate *)PHYS_TO_DMAP((vm_offset_t)moea64_part_table);
+			moea64_part_table = (struct pate *)PHYS_TO_DMAP(
+			    (vm_offset_t)moea64_part_table);
 	}
 	/*
 	 * PTEG table must be aligned on a 256k boundary, but can be placed
-	 * anywhere with that alignment.
+	 * anywhere with that alignment on POWER ISA 3+ systems. On earlier
+	 * systems, offset addition is done by the CPU with bitwise OR rather
+	 * than addition, so the table must also be aligned on a boundary of
+	 * its own size. Pick the larger of the two, which works on all
+	 * systems.
 	 */
-	moea64_pteg_table = (struct lpte *)moea64_bootstrap_alloc(size, 256*1024);
+	moea64_pteg_table = (struct lpte *)moea64_bootstrap_alloc(size, 
+	    MAX(256*1024, size));
 	if (hw_direct_map)
 		moea64_pteg_table =
 		    (struct lpte *)PHYS_TO_DMAP((vm_offset_t)moea64_pteg_table);
