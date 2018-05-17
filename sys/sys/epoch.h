@@ -36,6 +36,8 @@ struct epoch;
 typedef struct epoch *epoch_t;
 
 extern epoch_t global_epoch;
+DPCPU_DECLARE(int, epoch_cb_count);
+DPCPU_DECLARE(struct grouptask, epoch_cb_task);
 
 struct epoch_context {
 	void *data[2];
