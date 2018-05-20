@@ -1568,7 +1568,7 @@ unp_connectat(int fd, struct socket *so, struct sockaddr *nam,
 			so2 = NULL;
 		if (so2 == NULL) {
 			error = ECONNREFUSED;
-			goto bad3;
+			goto bad2;
 		}
 		unp3 = sotounpcb(so2);
 		unp_pcb_lock2(unp2, unp3);
@@ -1615,7 +1615,6 @@ unp_connectat(int fd, struct socket *so, struct sockaddr *nam,
 	    sotounpcb(so2) == unp2,
 	    ("%s: unp2 %p so2 %p", __func__, unp2, so2));
 	error = unp_connect2(so, so2, PRU_CONNECT);
-bad3:
 	UNP_PCB_UNLOCK(unp2);
 	UNP_PCB_UNLOCK(unp);
 bad2:
