@@ -23,16 +23,14 @@
 #include "top.h"
 
 #include <sys/ioctl.h>
+#include <stdlib.h>
 #include <string.h>
-#  define TERMIOS
-#  include <termios.h>
+#define TERMIOS
+#include <termios.h>
 #include <curses.h>
 #include <termcap.h>
 #include "screen.h"
 #include "boolean.h"
-
-extern char *myname;
-
 
 int  overstrike;
 int  screen_length;
@@ -41,8 +39,6 @@ char ch_erase;
 char ch_kill;
 char smart_terminal;
 char PC;
-char *tgetstr();
-char *tgoto();
 char termcap_buf[1024];
 char string_buffer[1024];
 char home[15];
@@ -59,8 +55,6 @@ char *terminal_end;
 static struct termios old_settings;
 static struct termios new_settings;
 static char is_a_terminal = No;
-static int old_lword;
-static int new_lword;
 
 #define	STDIN	0
 #define	STDOUT	1
@@ -75,7 +69,6 @@ int interactive;
     char *bufptr;
     char *PCptr;
     char *term_name;
-    char *getenv();
     int status;
 
     /* set defaults in case we aren't smart */
