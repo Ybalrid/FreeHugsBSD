@@ -44,7 +44,6 @@
 #include "layout.h"		/* defines for screen position layout */
 #include "display.h"
 #include "top.h"
-#include "top.local.h"
 #include "boolean.h"
 #include "machine.h"		/* we should eliminate this!!! */
 #include "utils.h"
@@ -588,13 +587,10 @@ for (cpu = 0; cpu < num_cpus; cpu++) {
  *                for i_memory ONLY: cursor is on the previous line
  */
 
-char memory_buffer[MAX_COLS];
+static char memory_buffer[MAX_COLS];
 
 void
-i_memory(stats)
-
-int *stats;
-
+i_memory(int *stats)
 {
     fputs("\nMem: ", stdout);
     lastline++;
@@ -605,10 +601,7 @@ int *stats;
 }
 
 void
-u_memory(stats)
-
-int *stats;
-
+u_memory(int *stats)
 {
     static char new[MAX_COLS];
 
@@ -1019,6 +1012,8 @@ new_message(int type, char *msgfmt, ...)
 
     /* first, format the message */
     snprintf(next_msg, sizeof(next_msg), msgfmt, args);
+
+    va_end(args);
 
     if (msglen > 0)
     {

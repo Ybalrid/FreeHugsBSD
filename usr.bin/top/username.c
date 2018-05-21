@@ -37,7 +37,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "top.local.h"
 #include "utils.h"
 #include "username.h"
 
@@ -56,7 +55,7 @@ struct hash_el {
 
 /* K&R requires that statically declared tables be initialized to zero. */
 /* We depend on that for hash_table and YOUR compiler had BETTER do it! */
-struct hash_el hash_table[Table_size];
+static struct hash_el hash_table[Table_size];
 
 
 char *username(uid)
