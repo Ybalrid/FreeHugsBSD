@@ -127,7 +127,7 @@ struct	in6_ifaddr {
 	struct	sockaddr_in6 ia_dstaddr; /* space for destination addr */
 	struct	sockaddr_in6 ia_prefixmask; /* prefix mask */
 	u_int32_t ia_plen;		/* prefix length */
-	STAILQ_ENTRY(in6_ifaddr)	ia_link;	/* list of IPv6 addresses */
+	CK_STAILQ_ENTRY(in6_ifaddr)	ia_link;	/* list of IPv6 addresses */
 	int	ia6_flags;
 
 	struct in6_addrlifetime ia6_lifetime;
@@ -142,12 +142,12 @@ struct	in6_ifaddr {
 	/* multicast addresses joined from the kernel */
 	LIST_HEAD(, in6_multi_mship) ia6_memberships;
 	/* entry in bucket of inet6 addresses */
-	LIST_ENTRY(in6_ifaddr) ia6_hash;
+	CK_LIST_ENTRY(in6_ifaddr) ia6_hash;
 };
 
 /* List of in6_ifaddr's. */
-STAILQ_HEAD(in6_ifaddrhead, in6_ifaddr);
-LIST_HEAD(in6_ifaddrlisthead, in6_ifaddr);
+CK_STAILQ_HEAD(in6_ifaddrhead, in6_ifaddr);
+CK_LIST_HEAD(in6_ifaddrlisthead, in6_ifaddr);
 #endif	/* _KERNEL */
 
 /* control structure to manage address selection policy */
@@ -784,7 +784,7 @@ in6m_rele_locked(struct in6_multi_head *inmh, struct in6_multi *inm)
 	IN6_MULTI_LIST_LOCK_ASSERT();
 
 	if (--inm->in6m_refcount == 0) {
-		in6m_disconnect(inm);
+		MPASS(inm->in6m_ifp == NULL);
 		inm->in6m_ifma->ifma_protospec = NULL;
 		MPASS(inm->in6m_ifma->ifma_llifma == NULL);
 		SLIST_INSERT_HEAD(inmh, inm, in6m_nrele);

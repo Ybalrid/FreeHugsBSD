@@ -712,7 +712,8 @@ aifaddr_out:
 			ND6_WUNLOCK();
 			nd6_prefix_del(pr);
 		}
-		EVENTHANDLER_INVOKE(ifaddr_event, ifp);
+		EVENTHANDLER_INVOKE(ifaddr_event_ext, ifp, &ia->ia_ifa,
+		    IFADDR_EVENT_DEL);
 		break;
 	}
 
@@ -1125,7 +1126,7 @@ in6_alloc_ifa(struct ifnet *ifp, struct in6_aliasreq *ifra, int flags)
 	ifa_ref(&ia->ia_ifa);			/* in6_ifaddrhead */
 	IN6_IFADDR_WLOCK();
 	CK_STAILQ_INSERT_TAIL(&V_in6_ifaddrhead, ia, ia_link);
-	LIST_INSERT_HEAD(IN6ADDR_HASH(&ia->ia_addr.sin6_addr), ia, ia6_hash);
+	CK_LIST_INSERT_HEAD(IN6ADDR_HASH(&ia->ia_addr.sin6_addr), ia, ia6_hash);
 	IN6_IFADDR_WUNLOCK();
 
 	return (ia);
@@ -1334,7 +1335,7 @@ in6_unlink_ifa(struct in6_ifaddr *ia, struct ifnet *ifp)
 	 */
 	IN6_IFADDR_WLOCK();
 	CK_STAILQ_REMOVE(&V_in6_ifaddrhead, ia, in6_ifaddr, ia_link);
-	LIST_REMOVE(ia, ia6_hash);
+	CK_LIST_REMOVE(ia, ia6_hash);
 	IN6_IFADDR_WUNLOCK();
 
 	/*
@@ -1456,7 +1457,10 @@ done:
 	WITNESS_WARN(WARN_GIANTOK | WARN_SLEEPOK, NULL,
 	    "Invoking IPv6 network device address event may sleep");
 
-	EVENTHANDLER_INVOKE(ifaddr_event, ifp);
+	ifa_ref(&ia->ia_ifa);
+	EVENTHANDLER_INVOKE(ifaddr_event_ext, ifp, &ia->ia_ifa,
+	    IFADDR_EVENT_ADD);
+	ifa_free(&ia->ia_ifa);
 
 	return (error);
 }
@@ -1499,7 +1503,7 @@ in6ifa_ifwithaddr(const struct in6_addr *addr, uint32_t zoneid)
 	struct in6_ifaddr *ia;
 
 	IN6_IFADDR_RLOCK(&in6_ifa_tracker);
-	LIST_FOREACH(ia, IN6ADDR_HASH(addr), ia6_hash) {
+	CK_LIST_FOREACH(ia, IN6ADDR_HASH(addr), ia6_hash) {
 		if (IN6_ARE_ADDR_EQUAL(IA6_IN6(ia), addr)) {
 			if (zoneid != 0 &&
 			    zoneid != ia->ia_addr.sin6_scope_id)
@@ -1676,7 +1680,7 @@ in6_localip(struct in6_addr *in6)
 	struct in6_ifaddr *ia;
 
 	IN6_IFADDR_RLOCK(&in6_ifa_tracker);
-	LIST_FOREACH(ia, IN6ADDR_HASH(in6), ia6_hash) {
+	CK_LIST_FOREACH(ia, IN6ADDR_HASH(in6), ia6_hash) {
 		if (IN6_ARE_ADDR_EQUAL(in6, &ia->ia_addr.sin6_addr)) {
 			IN6_IFADDR_RUNLOCK(&in6_ifa_tracker);
 			return (1);
@@ -1723,7 +1727,7 @@ in6_is_addr_deprecated(struct sockaddr_in6 *sa6)
 	struct in6_ifaddr *ia;
 
 	IN6_IFADDR_RLOCK(&in6_ifa_tracker);
-	LIST_FOREACH(ia, IN6ADDR_HASH(&sa6->sin6_addr), ia6_hash) {
+	CK_LIST_FOREACH(ia, IN6ADDR_HASH(&sa6->sin6_addr), ia6_hash) {
 		if (IN6_ARE_ADDR_EQUAL(IA6_IN6(ia), &sa6->sin6_addr)) {
 			if (ia->ia6_flags & IN6_IFF_DEPRECATED) {
 				IN6_IFADDR_RUNLOCK(&in6_ifa_tracker);
@@ -1973,7 +1977,7 @@ in6_setmaxmtu(void)
 	struct ifnet *ifp;
 
 	IFNET_RLOCK_NOSLEEP();
-	TAILQ_FOREACH(ifp, &V_ifnet, if_link) {
+	CK_STAILQ_FOREACH(ifp, &V_ifnet, if_link) {
 		/* this function can be called during ifnet initialization */
 		if (!ifp->if_afdata[AF_INET6])
 			continue;
@@ -2045,9 +2049,11 @@ struct in6_llentry {
  * Do actual deallocation of @lle.
  */
 static void
-in6_lltable_destroy_lle_unlocked(struct llentry *lle)
+in6_lltable_destroy_lle_unlocked(epoch_context_t ctx)
 {
+	struct llentry *lle;
 
+	lle = __containerof(ctx, struct llentry, lle_epoch_ctx);
 	LLE_LOCK_DESTROY(lle);
 	LLE_REQ_DESTROY(lle);
 	free(lle, M_LLTABLE);
@@ -2062,7 +2068,7 @@ in6_lltable_destroy_lle(struct llentry *lle)
 {
 
 	LLE_WUNLOCK(lle);
-	in6_lltable_destroy_lle_unlocked(lle);
+	epoch_call(net_epoch_preempt,  &lle->lle_epoch_ctx, in6_lltable_destroy_lle_unlocked);
 }
 
 static struct llentry *
@@ -2133,9 +2139,6 @@ in6_lltable_free_entry(struct lltable *llt, struct llentry *lle)
 		lltable_unlink_entry(llt, lle);
 	}
 
-	if (callout_stop(&lle->lle_timer) > 0)
-		LLE_REMREF(lle);
-
 	llentry_free(lle);
 }
 
@@ -2165,11 +2168,13 @@ in6_lltable_rtcheck(struct ifnet *ifp,
 		 * Create an ND6 cache for an IPv6 neighbor
 		 * that is not covered by our own prefix.
 		 */
+		NET_EPOCH_ENTER();
 		ifa = ifaof_ifpforaddr(l3addr, ifp);
 		if (ifa != NULL) {
-			ifa_free(ifa);
+			NET_EPOCH_EXIT();
 			return 0;
 		}
+		NET_EPOCH_EXIT();
 		log(LOG_INFO, "IPv6 address: \"%s\" is not on the network\n",
 		    ip6_sprintf(ip6buf, &sin6->sin6_addr));
 		return EINVAL;
@@ -2231,7 +2236,7 @@ in6_lltable_find_dst(struct lltable *llt, const struct in6_addr *dst)
 
 	hashidx = in6_lltable_hash_dst(dst, llt->llt_hsize);
 	lleh = &llt->lle_head[hashidx];
-	LIST_FOREACH(lle, lleh, lle_next) {
+	CK_LIST_FOREACH(lle, lleh, lle_next) {
 		if (lle->la_flags & LLE_DELETED)
 			continue;
 		if (IN6_ARE_ADDR_EQUAL(&lle->r_l3addr.addr6, dst))
@@ -2286,7 +2291,7 @@ in6_lltable_alloc(struct lltable *llt, u_int flags,
 		linkhdrsize = LLE_MAX_LINKHDR;
 		if (lltable_calc_llheader(ifp, AF_INET6, IF_LLADDR(ifp),
 		    linkhdr, &linkhdrsize, &lladdr_off) != 0) {
-			in6_lltable_destroy_lle_unlocked(lle);
+			epoch_call(net_epoch_preempt,  &lle->lle_epoch_ctx, in6_lltable_destroy_lle_unlocked);
 			return (NULL);
 		}
 		lltable_set_entry_addr(ifp, lle, linkhdr, linkhdrsize,

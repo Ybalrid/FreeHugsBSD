@@ -62,6 +62,8 @@ struct mdthread {
 	register_t md_saved_flags;	/* (k) */
 	register_t md_spurflt_addr;	/* (k) Spurious page fault address. */
 	struct pmap_invl_gen md_invl_gen;
+	register_t md_efirt_tmp;	/* (k) */
+	int	md_efirt_dis_pf;	/* (k) */
 };
 
 struct mdproc {
@@ -99,6 +101,9 @@ int amd64_set_ldt_data(struct thread *td, int start, int num,
 
 extern struct mtx dt_lock;
 extern int max_ldt_segment;
+
+#define	NARGREGS	6
+
 #endif  /* _KERNEL */
 
 #endif /* !_MACHINE_PROC_H_ */

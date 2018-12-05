@@ -5,12 +5,19 @@ PACKAGE=	tests
 TESTSDIR=       ${TESTSBASE}/sys/netpfil/pf
 TESTS_SUBDIRS+=	ioctl
 
-ATF_TESTS_SH+=	pass_block \
+ATF_TESTS_SH+=	anchor \
+		pass_block \
 		forward \
 		fragmentation \
-		set_tos
+		names \
+		set_tos \
+		route_to \
+		synproxy \
+		set_skip \
+		pfsync
 
 ${PACKAGE}FILES+=	utils.subr \
+			echo_inetd.conf \
 			pft_ping.py
 
 ${PACKAGE}FILESMODE_pft_ping.py=	0555

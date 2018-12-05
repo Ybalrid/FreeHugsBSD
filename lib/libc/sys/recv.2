@@ -28,7 +28,7 @@
 .\"     @(#)recv.2	8.3 (Berkeley) 2/21/94
 .\" $FreeBSD$
 .\"
-.Dd May 20, 2018
+.Dd August 19, 2018
 .Dt RECV 2
 .Os
 .Sh NAME
@@ -260,13 +260,8 @@ struct cmsghdr {
 };
 .Ed
 .Pp
-As an example, one could use this to learn of changes in the data-stream
-in XNS/SPP, or in ISO, to obtain user-connection-request data by requesting
-a
-.Fn recvmsg
-with no data buffer provided immediately after an
-.Fn accept
-system call.
+As an example, the SO_TIMESTAMP socket option returns a reception
+timestamp for UDP packets.
 .Pp
 With
 .Dv AF_UNIX
@@ -366,6 +361,7 @@ address space.
 .Xr read 2 ,
 .Xr select 2 ,
 .Xr socket 2 ,
+.Xr CMSG_DATA 3 ,
 .Xr unix 4
 .Sh HISTORY
 The

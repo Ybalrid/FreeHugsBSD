@@ -33,6 +33,7 @@
 # targets             - Print a list of supported TARGET/TARGET_ARCH pairs
 #                       for world and kernel targets.
 # toolchains          - Build a toolchain for all world and kernel targets.
+# sysent              - (Re)build syscall entries from syscalls.master.
 # xdev                - xdev-build + xdev-install for the architecture
 #                       specified with TARGET and TARGET_ARCH.
 # xdev-build          - Build cross-development tools.
@@ -61,9 +62,10 @@
 # Most of the user-driven targets (as listed above) are implemented in
 # Makefile.inc1.  The exceptions are universe, tinderbox and targets.
 #
-# If you want to build your system from source be sure that /usr/obj has
-# at least 6GB of diskspace available.  A complete 'universe' build requires
-# about 100GB of space.
+# If you want to build your system from source, be sure that /usr/obj has
+# at least 6 GB of disk space available.  A complete 'universe' build of
+# r340283 (2018-11) required 167 GB of space.  ZFS lz4 compression
+# achieved a 2.18x ratio, reducing actual space to 81 GB.
 #
 # For individuals wanting to build from the sources currently on their
 # system, the simple instructions are:
@@ -135,6 +137,7 @@ TGTS=	all all-man buildenv buildenvvars buildkernel buildworld \
 	reinstallkernel reinstallkernel.debug \
 	installworld kernel-toolchain libraries maninstall \
 	obj objlink showconfig tags toolchain update \
+	sysent \
 	_worldtmp _legacy _bootstrap-tools _cleanobj _obj \
 	_build-tools _build-metadata _cross-tools _includes _libraries \
 	build32 distribute32 install32 buildsoft distributesoft installsoft \
@@ -143,7 +146,7 @@ TGTS=	all all-man buildenv buildenvvars buildkernel buildworld \
 	stage-packages \
 	create-packages-world create-packages-kernel create-packages \
 	packages installconfig real-packages sign-packages package-pkg \
-	print-dir test-system-compiler
+	print-dir test-system-compiler test-system-linker
 
 # These targets require a TARGET and TARGET_ARCH be defined.
 XTGTS=	native-xtools native-xtools-install xdev xdev-build xdev-install \
@@ -168,8 +171,8 @@ META_TGT_WHITELIST+= \
 	_* build32 buildfiles buildincludes buildkernel buildsoft \
 	buildworld everything kernel-toolchain kernel-toolchains kernel \
 	kernels libraries native-xtools showconfig test-system-compiler \
-	tinderbox toolchain \
-	toolchains universe world worlds xdev xdev-build
+	test-system-linker tinderbox toolchain \
+	toolchains universe universe-toolchain world worlds xdev xdev-build
 
 .ORDER: buildworld installworld
 .ORDER: buildworld distrib-dirs
@@ -205,7 +208,7 @@ _MAKEOBJDIRPREFIX!= /usr/bin/env -i PATH=${PATH} ${MAKE} MK_AUTO_OBJ=no \
 # We often need to use the tree's version of make to build it.
 # Choices add to complexity though.
 # We cannot blindly use a make which may not be the one we want
-# so be exlicit - until all choice is removed.
+# so be explicit - until all choice is removed.
 WANT_MAKE=	bmake
 .if !empty(.MAKE.MODE:Mmeta)
 # 20160604 - support missing-meta,missing-filemon and performance improvements
@@ -480,14 +483,16 @@ worlds: .PHONY
 # with a reasonable chance of success, regardless of how old your
 # existing system is.
 #
-.if make(universe) || make(universe_kernels) || make(tinderbox) || make(targets)
+.if make(universe) || make(universe_kernels) || make(tinderbox) || \
+    make(targets) || make(universe-toolchain)
 TARGETS?=amd64 arm arm64 i386 mips powerpc riscv sparc64
 _UNIVERSE_TARGETS=	${TARGETS}
-TARGET_ARCHES_arm?=	arm armeb armv6 armv7
+TARGET_ARCHES_arm?=	arm armv6 armv7
 TARGET_ARCHES_arm64?=	aarch64
 TARGET_ARCHES_mips?=	mipsel mips mips64el mips64 mipsn32 mipselhf mipshf mips64elhf mips64hf
 TARGET_ARCHES_powerpc?=	powerpc powerpc64 powerpcspe
-TARGET_ARCHES_riscv?=	riscv64 riscv64sf
+# riscv64sf excluded due to PR 232085
+TARGET_ARCHES_riscv?=	riscv64
 .for target in ${TARGETS}
 TARGET_ARCHES_${target}?= ${target}
 .endfor
@@ -542,6 +547,36 @@ universe_prologue: .PHONY
 .if defined(DOING_TINDERBOX)
 	@rm -f ${FAILFILE}
 .endif
+
+universe-toolchain: .PHONY universe_prologue
+	@echo "--------------------------------------------------------------"
+	@echo "> Toolchain bootstrap started on `LC_ALL=C date`"
+	@echo "--------------------------------------------------------------"
+	${_+_}@cd ${.CURDIR}; \
+	    env PATH=${PATH} ${SUB_MAKE} ${JFLAG} kernel-toolchain \
+	    TARGET=${MACHINE} TARGET_ARCH=${MACHINE_ARCH} \
+	    OBJTOP="${HOST_OBJTOP}" \
+	    WITHOUT_SYSTEM_COMPILER=yes \
+	    WITHOUT_SYSTEM_LINKER=yes \
+	    TOOLS_PREFIX_UNDEF= \
+	    kernel-toolchain \
+	    MK_LLVM_TARGET_ALL=yes \
+	    > _.${.TARGET} 2>&1 || \
+	    (echo "${.TARGET} failed," \
+	    "check _.${.TARGET} for details" | \
+	    ${MAKEFAIL}; false)
+	@if [ ! -e "${HOST_OBJTOP}/tmp/usr/bin/cc" ]; then \
+	    echo "Missing host compiler at ${HOST_OBJTOP}/tmp/usr/bin/cc?" >&2; \
+	    false; \
+	fi
+	@if [ ! -e "${HOST_OBJTOP}/tmp/usr/bin/ld" ]; then \
+	    echo "Missing host linker at ${HOST_OBJTOP}/tmp/usr/bin/cc?" >&2; \
+	    false; \
+	fi
+	@echo "--------------------------------------------------------------"
+	@echo "> Toolchain bootstrap completed on `LC_ALL=C date`"
+	@echo "--------------------------------------------------------------"
+
 .for target in ${_UNIVERSE_TARGETS}
 universe: universe_${target}
 universe_epilogue: universe_${target}
@@ -550,10 +585,61 @@ universe_${target}_prologue: universe_prologue .PHONY
 	@echo ">> ${target} started on `LC_ALL=C date`"
 universe_${target}_worlds: .PHONY
 
+.if !make(targets) && !make(universe-toolchain)
+.for target_arch in ${TARGET_ARCHES_${target}}
+.if !defined(_need_clang_${target}_${target_arch})
+_need_clang_${target}_${target_arch} != \
+	env TARGET=${target} TARGET_ARCH=${target_arch} \
+	${SUB_MAKE} -C ${.CURDIR} -f Makefile.inc1 test-system-compiler \
+	    ${MAKE_PARAMS_${target}} -V MK_CLANG_BOOTSTRAP 2>/dev/null || \
+	    echo unknown
+.export _need_clang_${target}_${target_arch}
+.endif
+.if !defined(_need_lld_${target}_${target_arch})
+_need_lld_${target}_${target_arch} != \
+	env TARGET=${target} TARGET_ARCH=${target_arch} \
+	${SUB_MAKE} -C ${.CURDIR} -f Makefile.inc1 test-system-linker \
+	    ${MAKE_PARAMS_${target}} -V MK_LLD_BOOTSTRAP 2>/dev/null || \
+	    echo unknown
+.export _need_lld_${target}_${target_arch}
+.endif
+# Setup env for each arch to use the one clang.
+.if defined(_need_clang_${target}_${target_arch}) && \
+    ${_need_clang_${target}_${target_arch}} == "yes"
+# No check on existing XCC or CROSS_BINUTILS_PREFIX, etc, is needed since
+# we use the test-system-compiler logic to determine if clang needs to be
+# built.  It will be no from that logic if already using an external
+# toolchain or /usr/bin/cc.
+# XXX: Passing HOST_OBJTOP into the PATH would allow skipping legacy,
+#      bootstrap-tools, and cross-tools.  Need to ensure each tool actually
+#      supports all TARGETS though.
+# For now we only pass UNIVERSE_TOOLCHAIN_PATH which will be added at the end
+# of STRICTTMPPATH to ensure that the target-specific binaries come first.
+MAKE_PARAMS_${target}+= \
+	XCC="${HOST_OBJTOP}/tmp/usr/bin/cc" \
+	XCXX="${HOST_OBJTOP}/tmp/usr/bin/c++" \
+	XCPP="${HOST_OBJTOP}/tmp/usr/bin/cpp" \
+	UNIVERSE_TOOLCHAIN_PATH=${HOST_OBJTOP}/tmp/usr/bin
+.endif
+.if defined(_need_lld_${target}_${target_arch}) && \
+    ${_need_lld_${target}_${target_arch}} == "yes"
+MAKE_PARAMS_${target}+= \
+	XLD="${HOST_OBJTOP}/tmp/usr/bin/ld"
+.endif
+.endfor
+.endif	# !make(targets)
+
 .if !defined(MAKE_JUST_KERNELS)
 universe_${target}_done: universe_${target}_worlds .PHONY
 .for target_arch in ${TARGET_ARCHES_${target}}
 universe_${target}_worlds: universe_${target}_${target_arch} .PHONY
+.if (defined(_need_clang_${target}_${target_arch}) && \
+    ${_need_clang_${target}_${target_arch}} == "yes") || \
+    (defined(_need_lld_${target}_${target_arch}) && \
+    ${_need_lld_${target}_${target_arch}} == "yes")
+universe_${target}_${target_arch}: universe-toolchain
+universe_${target}_prologue: universe-toolchain
+.endif
 universe_${target}_${target_arch}: universe_${target}_prologue .MAKE .PHONY
 	@echo ">> ${target}.${target_arch} ${UNIVERSE_TARGET} started on `LC_ALL=C date`"
 	@(cd ${.CURDIR} && env __MAKE_CONF=/dev/null \
@@ -573,13 +659,13 @@ universe_${target}_${target_arch}: universe_${target}_prologue .MAKE .PHONY
 universe_${target}_done: universe_${target}_kernels .PHONY
 universe_${target}_kernels: universe_${target}_worlds .PHONY
 universe_${target}_kernels: universe_${target}_prologue .MAKE .PHONY
-.if exists(${KERNSRCDIR}/${target}/conf/NOTES)
-	@(cd ${KERNSRCDIR}/${target}/conf && env __MAKE_CONF=/dev/null \
+	@if [ -e "${KERNSRCDIR}/${target}/conf/NOTES" ]; then \
+	  (cd ${KERNSRCDIR}/${target}/conf && env __MAKE_CONF=/dev/null \
 	    ${SUB_MAKE} LINT \
 	    > ${.CURDIR}/_.${target}.makeLINT 2>&1 || \
 	    (echo "${target} 'make LINT' failed," \
-	    "check _.${target}.makeLINT for details"| ${MAKEFAIL}))
-.endif
+	    "check _.${target}.makeLINT for details"| ${MAKEFAIL})); \
+	fi
 	@cd ${.CURDIR}; ${SUB_MAKE} ${.MAKEFLAGS} TARGET=${target} \
 	    universe_kernels
 .endif # !MAKE_JUST_WORLDS
@@ -590,10 +676,13 @@ universe_${target}_done:
 	@echo ">> ${target} completed on `LC_ALL=C date`"
 .endfor
 .if make(universe_kernconfs) || make(universe_kernels)
-universe_kernels: universe_kernconfs .PHONY
 .if !defined(TARGET)
 TARGET!=	uname -m
 .endif
+universe_kernels_prologue: .PHONY
+	@echo ">> ${TARGET} kernels started on `LC_ALL=C date`"
+universe_kernels: universe_kernconfs .PHONY
+	@echo ">> ${TARGET} kernels completed on `LC_ALL=C date`"
 .if defined(MAKE_ALL_KERNELS)
 _THINNER=cat
 .elif defined(MAKE_LINT_KERNELS)
@@ -606,7 +695,7 @@ KERNCONFS!=	cd ${KERNSRCDIR}/${TARGET}/conf && \
 		-type f -maxdepth 0 \
 		! -name DEFAULTS ! -name NOTES | \
 		${_THINNER}
-universe_kernconfs: .PHONY
+universe_kernconfs: universe_kernels_prologue .PHONY
 .for kernel in ${KERNCONFS}
 TARGET_ARCH_${kernel}!=	cd ${KERNSRCDIR}/${TARGET}/conf && \
 	config -m ${KERNSRCDIR}/${TARGET}/conf/${kernel} 2> /dev/null | \
@@ -616,6 +705,7 @@ TARGET_ARCH_${kernel}!=	cd ${KERNSRCDIR}/${TARGET}/conf && \
 .endif
 universe_kernconfs: universe_kernconf_${TARGET}_${kernel}
 universe_kernconf_${TARGET}_${kernel}: .MAKE
+	@echo ">> ${TARGET}.${TARGET_ARCH_${kernel}} ${kernel} kernel started on `LC_ALL=C date`"
 	@(cd ${.CURDIR} && env __MAKE_CONF=/dev/null \
 	    ${SUB_MAKE} ${JFLAG} buildkernel \
 	    TARGET=${TARGET} \
@@ -625,6 +715,7 @@ universe_kernconf_${TARGET}_${kernel}: .MAKE
 	    > _.${TARGET}.${kernel} 2>&1 || \
 	    (echo "${TARGET} ${kernel} kernel failed," \
 	    "check _.${TARGET}.${kernel} for details"| ${MAKEFAIL}))
+	@echo ">> ${TARGET}.${TARGET_ARCH_${kernel}} ${kernel} kernel completed on `LC_ALL=C date`"
 .endfor
 .endif	# make(universe_kernels)
 universe: universe_epilogue

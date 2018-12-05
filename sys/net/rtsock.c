@@ -45,6 +45,7 @@
 #include <sys/priv.h>
 #include <sys/proc.h>
 #include <sys/protosw.h>
+#include <sys/rmlock.h>
 #include <sys/rwlock.h>
 #include <sys/signalvar.h>
 #include <sys/socket.h>
@@ -82,6 +83,7 @@ struct if_msghdr32 {
 	int32_t	ifm_addrs;
 	int32_t	ifm_flags;
 	uint16_t ifm_index;
+	uint16_t _ifm_spare1;
 	struct	if_data ifm_data;
 };
 
@@ -95,6 +97,7 @@ struct if_msghdrl32 {
 	uint16_t _ifm_spare1;
 	uint16_t ifm_len;
 	uint16_t ifm_data_off;
+	uint32_t _ifm_spare2;
 	struct	if_data ifm_data;
 };
 
@@ -139,7 +142,7 @@ typedef struct {
 	int	ip6_count;	/* attached w/ AF_INET6 */
 	int	any_count;	/* total attached */
 } route_cb_t;
-static VNET_DEFINE(route_cb_t, route_cb);
+VNET_DEFINE_STATIC(route_cb_t, route_cb);
 #define	V_route_cb VNET(route_cb)
 
 struct mtx rtsock_mtx;
@@ -542,6 +545,7 @@ rtm_get_jailed(struct rt_addrinfo *info, struct ifnet *ifp,
 static int
 route_output(struct mbuf *m, struct socket *so, ...)
 {
+	RIB_RLOCK_TRACKER;
 	struct rt_msghdr *rtm = NULL;
 	struct rtentry *rt = NULL;
 	struct rib_head *rnh;
@@ -784,12 +788,14 @@ route_output(struct mbuf *m, struct socket *so, ...)
 			    rt->rt_ifp->if_type == IFT_PROPVIRTUAL) {
 				struct ifaddr *ifa;
 
+				NET_EPOCH_ENTER();
 				ifa = ifa_ifwithnet(info.rti_info[RTAX_DST], 1,
 						RT_ALL_FIBS);
 				if (ifa != NULL)
 					rt_maskedcopy(ifa->ifa_addr,
 						      &laddr,
 						      ifa->ifa_netmask);
+				NET_EPOCH_EXIT();
 			} else
 				rt_maskedcopy(rt->rt_ifa->ifa_addr,
 					      &laddr,
@@ -1215,8 +1221,11 @@ rtsock_msg_buffer(int type, struct rt_addrinfo *rtinfo, struct walkarg *w, int *
 		dlen = ALIGN(len) - len;
 		if (buflen < dlen)
 			cp = NULL;
-		else
+		else {
+			bzero(cp, dlen);
+			cp += dlen;
 			buflen -= dlen;
+		}
 	}
 	len = ALIGN(len);
 
@@ -1550,6 +1559,8 @@ sysctl_dumpentry(struct radix_node *rn, void *vw)
 	struct rt_addrinfo info;
 	struct sockaddr_storage ss;
 
+	IFNET_RLOCK_NOSLEEP_ASSERT();
+
 	if (w->w_op == NET_RT_FLAGS && !(rt->rt_flags & w->w_arg))
 		return 0;
 	if ((rt->rt_flags & RTF_HOST) == 0
@@ -1562,7 +1573,7 @@ sysctl_dumpentry(struct radix_node *rn, void *vw)
 	info.rti_info[RTAX_NETMASK] = rtsock_fix_netmask(rt_key(rt),
 	    rt_mask(rt), &ss);
 	info.rti_info[RTAX_GENMASK] = 0;
-	if (rt->rt_ifp) {
+	if (rt->rt_ifp && !(rt->rt_ifp->if_flags & IFF_DYING)) {
 		info.rti_info[RTAX_IFP] = rt->rt_ifp->if_addr->ifa_addr;
 		info.rti_info[RTAX_IFA] = rt->rt_ifa->ifa_addr;
 		if (rt->rt_ifp->if_flags & IFF_POINTOPOINT)
@@ -1573,6 +1584,8 @@ sysctl_dumpentry(struct radix_node *rn, void *vw)
 	if (w->w_req && w->w_tmem) {
 		struct rt_msghdr *rtm = (struct rt_msghdr *)w->w_tmem;
 
+		bzero(&rtm->rtm_index,
+		    sizeof(*rtm) - offsetof(struct rt_msghdr, rtm_index));
 		if (rt->rt_flags & RTF_GWFLAG_COMPAT)
 			rtm->rtm_flags = RTF_GATEWAY | 
 				(rt->rt_flags & ~RTF_GWFLAG_COMPAT);
@@ -1580,7 +1593,6 @@ sysctl_dumpentry(struct radix_node *rn, void *vw)
 			rtm->rtm_flags = rt->rt_flags;
 		rt_getmetrics(rt, &rtm->rtm_rmx);
 		rtm->rtm_index = rt->rt_ifp->if_index;
-		rtm->rtm_errno = rtm->rtm_pid = rtm->rtm_seq = 0;
 		rtm->rtm_addrs = info.rti_addrs;
 		error = SYSCTL_OUT(w->w_req, (caddr_t)rtm, size);
 		return (error);
@@ -1608,6 +1620,7 @@ sysctl_iflist_ifml(struct ifnet *ifp, const struct if_data *src_ifd,
 		ifm32->_ifm_spare1 = 0;
 		ifm32->ifm_len = sizeof(*ifm32);
 		ifm32->ifm_data_off = offsetof(struct if_msghdrl32, ifm_data);
+		ifm32->_ifm_spare2 = 0;
 		ifd = &ifm32->ifm_data;
 	} else
 #endif
@@ -1618,6 +1631,7 @@ sysctl_iflist_ifml(struct ifnet *ifp, const struct if_data *src_ifd,
 		ifm->_ifm_spare1 = 0;
 		ifm->ifm_len = sizeof(*ifm);
 		ifm->ifm_data_off = offsetof(struct if_msghdrl, ifm_data);
+		ifm->_ifm_spare2 = 0;
 		ifd = &ifm->ifm_data;
 	}
 
@@ -1643,6 +1657,7 @@ sysctl_iflist_ifm(struct ifnet *ifp, const struct if_data *src_ifd,
 		ifm32->ifm_addrs = info->rti_addrs;
 		ifm32->ifm_flags = ifp->if_flags | ifp->if_drv_flags;
 		ifm32->ifm_index = ifp->if_index;
+		ifm32->_ifm_spare1 = 0;
 		ifd = &ifm32->ifm_data;
 	} else
 #endif
@@ -1650,6 +1665,7 @@ sysctl_iflist_ifm(struct ifnet *ifp, const struct if_data *src_ifd,
 		ifm->ifm_addrs = info->rti_addrs;
 		ifm->ifm_flags = ifp->if_flags | ifp->if_drv_flags;
 		ifm->ifm_index = ifp->if_index;
+		ifm->_ifm_spare1 = 0;
 		ifd = &ifm->ifm_data;
 	}
 
@@ -1718,6 +1734,7 @@ sysctl_iflist_ifam(struct ifaddr *ifa, struct rt_addrinfo *info,
 	ifam->ifam_addrs = info->rti_addrs;
 	ifam->ifam_flags = ifa->ifa_flags;
 	ifam->ifam_index = ifa->ifa_ifp->if_index;
+	ifam->_ifam_spare1 = 0;
 	ifam->ifam_metric = ifa->ifa_ifp->if_metric;
 
 	return (SYSCTL_OUT(w->w_req, w->w_tmem, len));
@@ -1732,15 +1749,15 @@ sysctl_iflist(int af, struct walkarg *w)
 	struct rt_addrinfo info;
 	int len, error = 0;
 	struct sockaddr_storage ss;
+	struct epoch_tracker et;
 
 	bzero((caddr_t)&info, sizeof(info));
 	bzero(&ifd, sizeof(ifd));
-	IFNET_RLOCK_NOSLEEP();
-	TAILQ_FOREACH(ifp, &V_ifnet, if_link) {
+	NET_EPOCH_ENTER_ET(et);
+	CK_STAILQ_FOREACH(ifp, &V_ifnet, if_link) {
 		if (w->w_arg && w->w_arg != ifp->if_index)
 			continue;
 		if_data_copy(ifp, &ifd);
-		IF_ADDR_RLOCK(ifp);
 		ifa = ifp->if_addr;
 		info.rti_info[RTAX_IFP] = ifa->ifa_addr;
 		error = rtsock_msg_buffer(RTM_IFINFO, &info, w, &len);
@@ -1781,15 +1798,12 @@ sysctl_iflist(int af, struct walkarg *w)
 					goto done;
 			}
 		}
-		IF_ADDR_RUNLOCK(ifp);
 		info.rti_info[RTAX_IFA] = NULL;
 		info.rti_info[RTAX_NETMASK] = NULL;
 		info.rti_info[RTAX_BRD] = NULL;
 	}
 done:
-	if (ifp != NULL)
-		IF_ADDR_RUNLOCK(ifp);
-	IFNET_RUNLOCK_NOSLEEP();
+	NET_EPOCH_EXIT_ET(et);
 	return (error);
 }
 
@@ -1806,7 +1820,7 @@ sysctl_ifmalist(int af, struct walkarg *w)
 	bzero((caddr_t)&info, sizeof(info));
 
 	IFNET_RLOCK_NOSLEEP();
-	TAILQ_FOREACH(ifp, &V_ifnet, if_link) {
+	CK_STAILQ_FOREACH(ifp, &V_ifnet, if_link) {
 		if (w->w_arg && w->w_arg != ifp->if_index)
 			continue;
 		ifa = ifp->if_addr;
@@ -1832,6 +1846,7 @@ sysctl_ifmalist(int af, struct walkarg *w)
 				ifmam->ifmam_index = ifma->ifma_ifp->if_index;
 				ifmam->ifmam_flags = 0;
 				ifmam->ifmam_addrs = info.rti_addrs;
+				ifmam->_ifmam_spare1 = 0;
 				error = SYSCTL_OUT(w->w_req, w->w_tmem, len);
 				if (error != 0)
 					break;
@@ -1848,6 +1863,7 @@ sysctl_ifmalist(int af, struct walkarg *w)
 static int
 sysctl_rtsock(SYSCTL_HANDLER_ARGS)
 {
+	RIB_RLOCK_TRACKER;
 	int	*name = (int *)arg1;
 	u_int	namelen = arg2;
 	struct rib_head *rnh = NULL; /* silence compiler. */
@@ -1920,8 +1936,10 @@ sysctl_rtsock(SYSCTL_HANDLER_ARGS)
 			rnh = rt_tables_get_rnh(fib, i);
 			if (rnh != NULL) {
 				RIB_RLOCK(rnh); 
+				IFNET_RLOCK_NOSLEEP();
 			    	error = rnh->rnh_walktree(&rnh->head,
 				    sysctl_dumpentry, &w);
+				IFNET_RUNLOCK_NOSLEEP();
 				RIB_RUNLOCK(rnh);
 			} else if (af != 0)
 				error = EAFNOSUPPORT;

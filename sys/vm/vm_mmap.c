@@ -129,14 +129,8 @@ sys_sstk(struct thread *td, struct sstk_args *uap)
 }
 
 #if defined(COMPAT_43)
-#ifndef _SYS_SYSPROTO_H_
-struct getpagesize_args {
-	int dummy;
-};
-#endif
-
 int
-ogetpagesize(struct thread *td, struct getpagesize_args *uap)
+ogetpagesize(struct thread *td, struct ogetpagesize_args *uap)
 {
 
 	td->td_retval[0] = PAGE_SIZE;
@@ -241,8 +235,11 @@ kern_mmap(struct thread *td, uintptr_t addr0, size_t size, int prot, int flags,
 	    (prot & ~(PROT_READ | PROT_WRITE | PROT_EXEC)) != 0)
 		return (EINVAL);
 	if ((flags & MAP_GUARD) != 0 && (prot != PROT_NONE || fd != -1 ||
-	    pos != 0 || (flags & (MAP_SHARED | MAP_PRIVATE | MAP_PREFAULT |
-	    MAP_PREFAULT_READ | MAP_ANON | MAP_STACK)) != 0))
+	    pos != 0 || (flags & ~(MAP_FIXED | MAP_GUARD | MAP_EXCL |
+#ifdef MAP_32BIT
+	    MAP_32BIT |
+#endif
+	    MAP_ALIGNMENT_MASK)) != 0))
 		return (EINVAL);
 
 	/*
@@ -597,6 +594,12 @@ kern_mprotect(struct thread *td, uintptr_t addr0, size_t size, int prot)
 	addr -= pageoff;
 	size += pageoff;
 	size = (vm_size_t) round_page(size);
+#ifdef COMPAT_FREEBSD32
+	if (SV_PROC_FLAG(td->td_proc, SV_ILP32)) {
+		if (((addr + size) & 0xffffffff) < addr)
+			return (EINVAL);
+	} else
+#endif
 	if (addr + size < addr)
 		return (EINVAL);
 
@@ -680,11 +683,6 @@ kern_madvise(struct thread *td, uintptr_t addr0, size_t len, int behav)
 	}
 
 	/*
-	 * Check for illegal behavior
-	 */
-	if (behav < 0 || behav > MADV_CORE)
-		return (EINVAL);
-	/*
 	 * Check for illegal addresses.  Watch out for address wrap... Note
 	 * that VM_*_ADDRESS are not constants due to casts (argh).
 	 */
@@ -702,9 +700,10 @@ kern_madvise(struct thread *td, uintptr_t addr0, size_t len, int behav)
 	start = trunc_page(addr);
 	end = round_page(addr + len);
 
-	if (vm_map_madvise(map, start, end, behav))
-		return (EINVAL);
-	return (0);
+	/*
+	 * vm_map_madvise() checks for illegal values of behav.
+	 */
+	return (vm_map_madvise(map, start, end, behav));
 }
 
 #ifndef _SYS_SYSPROTO_H_
@@ -1050,12 +1049,8 @@ sys_mlockall(struct thread *td, struct mlockall_args *uap)
 	 * a hard resource limit, return ENOMEM.
 	 */
 	if (!old_mlock && uap->how & MCL_CURRENT) {
-		PROC_LOCK(td->td_proc);
-		if (map->size > lim_cur(td, RLIMIT_MEMLOCK)) {
-			PROC_UNLOCK(td->td_proc);
+		if (map->size > lim_cur(td, RLIMIT_MEMLOCK))
 			return (ENOMEM);
-		}
-		PROC_UNLOCK(td->td_proc);
 	}
 #ifdef RACCT
 	if (racct_enable) {
@@ -1440,21 +1435,21 @@ vm_mmap_object(vm_map_t map, vm_offset_t *addr, vm_size_t size, vm_prot_t prot,
 
 	curmap = map == &td->td_proc->p_vmspace->vm_map;
 	if (curmap) {
-		PROC_LOCK(td->td_proc);
-		if (map->size + size > lim_cur_proc(td->td_proc, RLIMIT_VMEM)) {
-			PROC_UNLOCK(td->td_proc);
+		RACCT_PROC_LOCK(td->td_proc);
+		if (map->size + size > lim_cur(td, RLIMIT_VMEM)) {
+			RACCT_PROC_UNLOCK(td->td_proc);
 			return (ENOMEM);
 		}
 		if (racct_set(td->td_proc, RACCT_VMEM, map->size + size)) {
-			PROC_UNLOCK(td->td_proc);
+			RACCT_PROC_UNLOCK(td->td_proc);
 			return (ENOMEM);
 		}
 		if (!old_mlock && map->flags & MAP_WIREFUTURE) {
 			if (ptoa(pmap_wired_count(map->pmap)) + size >
-			    lim_cur_proc(td->td_proc, RLIMIT_MEMLOCK)) {
+			    lim_cur(td, RLIMIT_MEMLOCK)) {
 				racct_set_force(td->td_proc, RACCT_VMEM,
 				    map->size);
-				PROC_UNLOCK(td->td_proc);
+				RACCT_PROC_UNLOCK(td->td_proc);
 				return (ENOMEM);
 			}
 			error = racct_set(td->td_proc, RACCT_MEMLOCK,
@@ -1462,11 +1457,11 @@ vm_mmap_object(vm_map_t map, vm_offset_t *addr, vm_size_t size, vm_prot_t prot,
 			if (error != 0) {
 				racct_set_force(td->td_proc, RACCT_VMEM,
 				    map->size);
-				PROC_UNLOCK(td->td_proc);
+				RACCT_PROC_UNLOCK(td->td_proc);
 				return (error);
 			}
 		}
-		PROC_UNLOCK(td->td_proc);
+		RACCT_PROC_UNLOCK(td->td_proc);
 	}
 
 	/*

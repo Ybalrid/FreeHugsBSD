@@ -41,6 +41,7 @@
 #include <sys/malloc.h>
 #include <sys/rwlock.h>
 #include <sys/sx.h>
+#include <sys/vmem.h>
 #include <vm/uma.h>
 
 #include <dev/pci/pcivar.h>
@@ -81,10 +82,7 @@ prefetch(void *x)
 #define CTLTYPE_U64 CTLTYPE_QUAD
 #endif
 
-#if (__FreeBSD_version >= 900030) || \
-    ((__FreeBSD_version >= 802507) && (__FreeBSD_version < 900000))
-#define SBUF_DRAIN 1
-#endif
+SYSCTL_DECL(_hw_cxgbe);
 
 struct adapter;
 typedef struct adapter adapter_t;
@@ -105,7 +103,7 @@ enum {
 	EQ_ESIZE = 64,
 
 	/* Default queue sizes for all kinds of egress queues */
-	CTRL_EQ_QSIZE = 128,
+	CTRL_EQ_QSIZE = 1024,
 	TX_EQ_QSIZE = 1024,
 
 #if MJUMPAGESIZE != MCLBYTES
@@ -118,6 +116,7 @@ enum {
 	SGE_MAX_WR_NDESC = SGE_MAX_WR_LEN / EQ_ESIZE, /* max WR size in desc */
 	TX_SGL_SEGS = 39,
 	TX_SGL_SEGS_TSO = 38,
+	TX_SGL_SEGS_EO_TSO = 30,	/* XXX: lower for IPv6. */
 	TX_WR_FLITS = SGE_MAX_WR_LEN / 8
 };
 
@@ -164,6 +163,7 @@ enum {
 
 	/* port flags */
 	HAS_TRACEQ	= (1 << 3),
+	FIXED_IFMEDIA	= (1 << 4),	/* ifmedia list doesn't change. */
 
 	/* VI flags */
 	DOOMED		= (1 << 0),
@@ -197,8 +197,7 @@ struct vi_info {
 	int16_t  xact_addr_filt;/* index of exact MAC address filter */
 	uint16_t rss_size;	/* size of VI's RSS table slice */
 	uint16_t rss_base;	/* start of VI's RSS table slice */
-
-	eventhandler_tag vlan_c;
+	int hashen;
 
 	int nintr;
 	int first_intr;
@@ -239,18 +238,21 @@ struct tx_ch_rl_params {
 };
 
 enum {
-	TX_CLRL_REFRESH	= (1 << 0),	/* Need to update hardware state. */
-	TX_CLRL_ERROR	= (1 << 1),	/* Error, hardware state unknown. */
+	CLRL_USER	= (1 << 0),	/* allocated manually. */
+	CLRL_SYNC	= (1 << 1),	/* sync hw update in progress. */
+	CLRL_ASYNC	= (1 << 2),	/* async hw update requested. */
+	CLRL_ERR	= (1 << 3),	/* last hw setup ended in error. */
 };
 
 struct tx_cl_rl_params {
 	int refcount;
-	u_int flags;
+	uint8_t flags;
 	enum fw_sched_params_rate ratemode;	/* %port REL or ABS value */
 	enum fw_sched_params_unit rateunit;	/* kbps or pps (when ABS) */
 	enum fw_sched_params_mode mode;		/* aggr or per-flow */
 	uint32_t maxrate;
 	uint16_t pktsize;
+	uint16_t burstsize;
 };
 
 /* Tx scheduler parameters for a channel/port */
@@ -261,7 +263,9 @@ struct tx_sched_params {
 	/* Class WRR */
 	/* XXX */
 
-	/* Class Rate Limiter */
+	/* Class Rate Limiter (including the default pktsize and burstsize). */
+	int pktsize;
+	int burstsize;
 	struct tx_cl_rl_params cl_rl[];
 };
 
@@ -290,7 +294,6 @@ struct port_info {
 	uint8_t  rx_e_chan_map;	/* rx TP e-channel bitmap */
 
 	struct link_config link_cfg;
-	struct link_config old_link_cfg;
 	struct ifmedia media;
 
 	struct timeval last_refreshed;
@@ -350,7 +353,7 @@ enum {
 	/* iq flags */
 	IQ_ALLOCATED	= (1 << 0),	/* firmware resources allocated */
 	IQ_HAS_FL	= (1 << 1),	/* iq associated with a freelist */
-					/* 1 << 2 Used to be IQ_INTR */
+	IQ_RX_TIMESTAMP	= (1 << 2),	/* provide the SGE rx timestamp */
 	IQ_LRO_ENABLED	= (1 << 3),	/* iq is an eth rxq with LRO enabled */
 	IQ_ADJ_CREDIT	= (1 << 4),	/* hw is off by 1 credit for this iq */
 
@@ -372,7 +375,7 @@ enum {
 	CPL_COOKIE_DDP1,
 	CPL_COOKIE_TOM,
 	CPL_COOKIE_HASHFILTER,
-	CPL_COOKIE_AVAILABLE2,
+	CPL_COOKIE_ETHOFLD,
 	CPL_COOKIE_AVAILABLE3,
 
 	NUM_CPL_COOKIES = 8	/* Limited by M_COOKIE.  Do not increase. */
@@ -574,6 +577,7 @@ struct sge_txq {
 	uint64_t txpkts1_wrs;	/* # of type1 coalesced tx work requests */
 	uint64_t txpkts0_pkts;	/* # of frames in type0 coalesced tx WRs */
 	uint64_t txpkts1_pkts;	/* # of frames in type1 coalesced tx WRs */
+	uint64_t raw_wrs;	/* # of raw work requests (alloc_wr_mbuf) */
 
 	/* stats for not-that-common events */
 } __aligned(CACHE_LINE_SIZE);
@@ -669,6 +673,7 @@ struct sge_wrq {
 
 #define INVALID_NM_RXQ_CNTXT_ID ((uint16_t)(-1))
 struct sge_nm_rxq {
+	volatile int nm_state;	/* NM_OFF, NM_ON, or NM_BUSY */
 	struct vi_info *vi;
 
 	struct iq_desc *iq_desc;
@@ -686,6 +691,7 @@ struct sge_nm_rxq {
 	uint32_t fl_db_val;
 	u_int fl_hwidx:4;
 
+	u_int fl_db_saved;
 	u_int nid;		/* netmap ring # for this queue */
 
 	/* infrequently used items after this */
@@ -735,7 +741,6 @@ struct sge {
 	int neq;	/* total # of egress queues */
 
 	struct sge_iq fwq;	/* Firmware event queue */
-	struct sge_wrq mgmtq;	/* Management queue (control queue) */
 	struct sge_wrq *ctrlq;	/* Control queues */
 	struct sge_txq *txq;	/* NIC tx queues */
 	struct sge_rxq *rxq;	/* NIC rx queues */
@@ -766,6 +771,8 @@ struct devnames {
 	const char *vf_ifnet_name;
 };
 
+struct clip_entry;
+
 struct adapter {
 	SLIST_ENTRY(adapter) link;
 	device_t dev;
@@ -795,7 +802,6 @@ struct adapter {
 	struct irq {
 		struct resource *res;
 		int rid;
-		volatile int nm_state;	/* NM_OFF, NM_ON, or NM_BUSY */
 		void *tag;
 		struct sge_rxq *rxq;
 		struct sge_nm_rxq *nm_rxq;
@@ -813,6 +819,10 @@ struct adapter {
 	struct port_info *port[MAX_NPORTS];
 	uint8_t chan_map[MAX_NCHAN];		/* channel -> port */
 
+	struct mtx clip_table_lock;
+	TAILQ_HEAD(, clip_entry) clip_table;
+	int clip_gen;
+
 	void *tom_softc;	/* (struct tom_data *) */
 	struct tom_tunables tt;
 	struct t4_offload_policy *policy;
@@ -823,7 +833,9 @@ struct adapter {
 	void *iscsi_ulp_softc;	/* (struct cxgbei_data *) */
 	void *ccr_softc;	/* (struct ccr_softc *) */
 	struct l2t_data *l2t;	/* L2 table */
+	struct smt_data *smt;	/* Source MAC Table */
 	struct tid_info tids;
+	vmem_t *key_map;
 
 	uint8_t doorbells;
 	int offload_map;	/* ports with IFCAP_TOE enabled */
@@ -1073,52 +1085,6 @@ t4_os_set_hw_addr(struct port_info *pi, uint8_t hw_addr[])
 	bcopy(hw_addr, pi->vi[0].hw_addr, ETHER_ADDR_LEN);
 }
 
-static inline bool
-is_10G_port(const struct port_info *pi)
-{
-
-	return ((pi->link_cfg.supported & FW_PORT_CAP_SPEED_10G) != 0);
-}
-
-static inline bool
-is_25G_port(const struct port_info *pi)
-{
-
-	return ((pi->link_cfg.supported & FW_PORT_CAP_SPEED_25G) != 0);
-}
-
-static inline bool
-is_40G_port(const struct port_info *pi)
-{
-
-	return ((pi->link_cfg.supported & FW_PORT_CAP_SPEED_40G) != 0);
-}
-
-static inline bool
-is_100G_port(const struct port_info *pi)
-{
-
-	return ((pi->link_cfg.supported & FW_PORT_CAP_SPEED_100G) != 0);
-}
-
-static inline int
-port_top_speed(const struct port_info *pi)
-{
-
-	if (pi->link_cfg.supported & FW_PORT_CAP_SPEED_100G)
-		return (100);
-	if (pi->link_cfg.supported & FW_PORT_CAP_SPEED_40G)
-		return (40);
-	if (pi->link_cfg.supported & FW_PORT_CAP_SPEED_25G)
-		return (25);
-	if (pi->link_cfg.supported & FW_PORT_CAP_SPEED_10G)
-		return (10);
-	if (pi->link_cfg.supported & FW_PORT_CAP_SPEED_1G)
-		return (1);
-
-	return (0);
-}
-
 static inline int
 tx_resume_threshold(struct sge_eq *eq)
 {
@@ -1180,12 +1146,15 @@ int alloc_atid(struct adapter *, void *);
 void *lookup_atid(struct adapter *, int);
 void free_atid(struct adapter *, int);
 void release_tid(struct adapter *, int, struct sge_wrq *);
+int cxgbe_media_change(struct ifnet *);
+void cxgbe_media_status(struct ifnet *, struct ifmediareq *);
 
 #ifdef DEV_NETMAP
 /* t4_netmap.c */
+struct sge_nm_rxq;
 void cxgbe_nm_attach(struct vi_info *);
 void cxgbe_nm_detach(struct vi_info *);
-void t4_nm_intr(void *);
+void service_nm_rxq(struct sge_nm_rxq *);
 #endif
 
 /* t4_sge.c */
@@ -1204,11 +1173,15 @@ int t4_setup_vi_queues(struct vi_info *);
 int t4_teardown_vi_queues(struct vi_info *);
 void t4_intr_all(void *);
 void t4_intr(void *);
+#ifdef DEV_NETMAP
+void t4_nm_intr(void *);
 void t4_vi_intr(void *);
+#endif
 void t4_intr_err(void *);
 void t4_intr_evt(void *);
 void t4_wrq_tx_locked(struct adapter *, struct sge_wrq *, struct wrqe *);
 void t4_update_fl_bufsize(struct ifnet *);
+struct mbuf *alloc_wr_mbuf(int, int);
 int parse_pkt(struct adapter *, struct mbuf **);
 void *start_wrq_wr(struct sge_wrq *, int, struct wrq_cookie *);
 void commit_wrq_wr(struct sge_wrq *, void *, struct wrq_cookie *);
@@ -1217,6 +1190,10 @@ void t4_register_an_handler(an_handler_t);
 void t4_register_fw_msg_handler(int, fw_msg_handler_t);
 void t4_register_cpl_handler(int, cpl_handler_t);
 void t4_register_shared_cpl_handler(int, cpl_handler_t, int);
+#ifdef RATELIMIT
+int ethofld_transmit(struct ifnet *, struct mbuf *);
+void send_etid_flush_wr(struct cxgbe_snd_tag *);
+#endif
 
 /* t4_tracer.c */
 struct t4_tracer;
@@ -1235,15 +1212,19 @@ int t4_init_tx_sched(struct adapter *);
 int t4_free_tx_sched(struct adapter *);
 void t4_update_tx_sched(struct adapter *);
 int t4_reserve_cl_rl_kbps(struct adapter *, int, u_int, int *);
-void t4_release_cl_rl_kbps(struct adapter *, int, int);
+void t4_release_cl_rl(struct adapter *, int, int);
+int sysctl_tc(SYSCTL_HANDLER_ARGS);
+int sysctl_tc_params(SYSCTL_HANDLER_ARGS);
 #ifdef RATELIMIT
 void t4_init_etid_table(struct adapter *);
 void t4_free_etid_table(struct adapter *);
+struct cxgbe_snd_tag *lookup_etid(struct adapter *, int);
 int cxgbe_snd_tag_alloc(struct ifnet *, union if_snd_tag_alloc_params *,
     struct m_snd_tag **);
 int cxgbe_snd_tag_modify(struct m_snd_tag *, union if_snd_tag_modify_params *);
 int cxgbe_snd_tag_query(struct m_snd_tag *, union if_snd_tag_query_params *);
 void cxgbe_snd_tag_free(struct m_snd_tag *);
+void cxgbe_snd_tag_free_locked(struct cxgbe_snd_tag *);
 #endif
 
 /* t4_filter.c */
@@ -1256,6 +1237,7 @@ int t4_filter_rpl(struct sge_iq *, const struct rss_header *, struct mbuf *);
 int t4_hashfilter_ao_rpl(struct sge_iq *, const struct rss_header *, struct mbuf *);
 int t4_hashfilter_tcb_rpl(struct sge_iq *, const struct rss_header *, struct mbuf *);
 int t4_del_hashfilter_rpl(struct sge_iq *, const struct rss_header *, struct mbuf *);
+void free_hftid_hash(struct tid_info *);
 
 static inline struct wrqe *
 alloc_wrqe(int wr_len, struct sge_wrq *wrq)

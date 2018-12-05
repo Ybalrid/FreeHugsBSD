@@ -146,6 +146,7 @@ struct vm_map_entry {
 #define	MAP_ENTRY_GUARD			0x10000
 #define	MAP_ENTRY_STACK_GAP_DN		0x20000
 #define	MAP_ENTRY_STACK_GAP_UP		0x40000
+#define	MAP_ENTRY_HEADER		0x80000
 
 #ifdef	_KERNEL
 static __inline u_char
@@ -173,19 +174,24 @@ vm_map_entry_system_wired_count(vm_map_entry_t entry)
  *	A map is a set of map entries.  These map entries are
  *	organized both as a binary search tree and as a doubly-linked
  *	list.  Both structures are ordered based upon the start and
- *	end addresses contained within each map entry.  The list
- *	header has max start value and min end value to act as
- *	sentinels for sequential search of the doubly-linked list.
+ *	end addresses contained within each map entry.
+ *
  *	Sleator and Tarjan's top-down splay algorithm is employed to
  *	control height imbalance in the binary search tree.
  *
- * List of locks
+ *	The map's min offset value is stored in map->header.end, and
+ *	its max offset value is stored in map->header.start.  These
+ *	values act as sentinels for any forward or backward address
+ *	scan of the list.  The map header has a special value for the
+ *	eflags field, MAP_ENTRY_HEADER, that is set initially, is
+ *	never changed, and prevents an eflags match of the header
+ *	with any other map entry.
+ *
+ *	List of locks
  *	(c)	const until freed
  */
 struct vm_map {
 	struct vm_map_entry header;	/* List of entries */
-#define	min_offset	header.end	/* (c) */
-#define	max_offset	header.start	/* (c) */
 	struct sx lock;			/* Lock for map data */
 	struct mtx system_mtx;
 	int nentries;			/* Number of entries */
@@ -206,7 +212,7 @@ struct vm_map {
 #define	MAP_BUSY_WAKEUP		0x02
 
 #ifdef	_KERNEL
-#ifdef KLD_MODULE
+#if defined(KLD_MODULE) && !defined(KLD_TIED)
 #define	vm_map_max(map)		vm_map_max_KBI((map))
 #define	vm_map_min(map)		vm_map_min_KBI((map))
 #define	vm_map_pmap(map)	vm_map_pmap_KBI((map))
@@ -214,13 +220,15 @@ struct vm_map {
 static __inline vm_offset_t
 vm_map_max(const struct vm_map *map)
 {
-	return (map->max_offset);
+
+	return (map->header.start);
 }
 
 static __inline vm_offset_t
 vm_map_min(const struct vm_map *map)
 {
-	return (map->min_offset);
+
+	return (map->header.end);
 }
 
 static __inline pmap_t

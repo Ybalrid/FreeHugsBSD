@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2014 Nahanni Systems Inc.
  * All rights reserved.
  *
@@ -166,6 +168,7 @@ pci_vtrnd_init(struct vmctx *ctx, struct pci_devinst *pi, char *opts)
 	len = read(fd, &v, sizeof(v));
 	if (len <= 0) {
 		WPRINTF(("vtrnd: /dev/random not ready, read(): %d", len));
+		close(fd);
 		return (1);
 	}
 

@@ -1411,10 +1411,6 @@ typedef	struct	tcpiphdr	tcpiphdr_t;
 #undef	ICMP_MAXTYPE
 #define	ICMP_MAXTYPE		18
 
-#ifndef	IFNAMSIZ
-#define	IFNAMSIZ		16
-#endif
-
 #ifndef	LOG_FTP
 # define	LOG_FTP		(11<<3)
 #endif
@@ -1461,10 +1457,6 @@ typedef	struct	tcpiphdr	tcpiphdr_t;
 # define	DPRINT(x)	printf x
 #else
 # define	DPRINT(x)
-#endif
-
-#ifndef	AF_INET6
-# define	AF_INET6	26
 #endif
 
 #ifdef DTRACE_PROBE

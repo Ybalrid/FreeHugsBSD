@@ -46,6 +46,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/memrange.h>
 #include <sys/smp.h>
 #include <sys/systm.h>
+#include <sys/cons.h>
 
 #include <vm/vm.h>
 #include <vm/pmap.h>
@@ -53,10 +54,11 @@ __FBSDID("$FreeBSD$");
 #include <machine/clock.h>
 #include <machine/cpu.h>
 #include <machine/intr_machdep.h>
+#include <machine/md_var.h>
 #include <x86/mca.h>
 #include <machine/pcb.h>
 #include <machine/specialreg.h>
-#include <machine/md_var.h>
+#include <x86/ucode.h>
 
 #ifdef DEV_APIC
 #include <x86/apicreg.h>
@@ -296,6 +298,12 @@ acpi_sleep_machdep(struct acpi_softc *sc, int state)
 		for (;;)
 			ia32_pause();
 	} else {
+		/*
+		 * Re-initialize console hardware as soon as possibe.
+		 * No console output (e.g. printf) is allowed before
+		 * this point.
+		 */
+		cnresume();
 #ifdef __amd64__
 		fpuresume(susppcbs[0]->sp_fpususpend);
 #else
@@ -317,6 +325,7 @@ acpi_wakeup_machdep(struct acpi_softc *sc, int state, int sleep_result,
 	if (!intr_enabled) {
 		/* Wakeup MD procedures in interrupt disabled context */
 		if (sleep_result == 1) {
+			ucode_reload();
 			pmap_init_pat();
 			initializecpu();
 			PCPU_SET(switchtime, 0);

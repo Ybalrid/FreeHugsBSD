@@ -113,20 +113,20 @@
  */
 
 VNET_DEFINE(u_int32_t, key_debug_level) = 0;
-static VNET_DEFINE(u_int, key_spi_trycnt) = 1000;
-static VNET_DEFINE(u_int32_t, key_spi_minval) = 0x100;
-static VNET_DEFINE(u_int32_t, key_spi_maxval) = 0x0fffffff;	/* XXX */
-static VNET_DEFINE(u_int32_t, policy_id) = 0;
+VNET_DEFINE_STATIC(u_int, key_spi_trycnt) = 1000;
+VNET_DEFINE_STATIC(u_int32_t, key_spi_minval) = 0x100;
+VNET_DEFINE_STATIC(u_int32_t, key_spi_maxval) = 0x0fffffff;	/* XXX */
+VNET_DEFINE_STATIC(u_int32_t, policy_id) = 0;
 /*interval to initialize randseed,1(m)*/
-static VNET_DEFINE(u_int, key_int_random) = 60;
+VNET_DEFINE_STATIC(u_int, key_int_random) = 60;
 /* interval to expire acquiring, 30(s)*/
-static VNET_DEFINE(u_int, key_larval_lifetime) = 30;
+VNET_DEFINE_STATIC(u_int, key_larval_lifetime) = 30;
 /* counter for blocking SADB_ACQUIRE.*/
-static VNET_DEFINE(int, key_blockacq_count) = 10;
+VNET_DEFINE_STATIC(int, key_blockacq_count) = 10;
 /* lifetime for blocking SADB_ACQUIRE.*/
-static VNET_DEFINE(int, key_blockacq_lifetime) = 20;
+VNET_DEFINE_STATIC(int, key_blockacq_lifetime) = 20;
 /* preferred old sa rather than new sa.*/
-static VNET_DEFINE(int, key_preferred_oldsa) = 1;
+VNET_DEFINE_STATIC(int, key_preferred_oldsa) = 1;
 #define	V_key_spi_trycnt	VNET(key_spi_trycnt)
 #define	V_key_spi_minval	VNET(key_spi_minval)
 #define	V_key_spi_maxval	VNET(key_spi_maxval)
@@ -137,17 +137,17 @@ static VNET_DEFINE(int, key_preferred_oldsa) = 1;
 #define	V_key_blockacq_lifetime	VNET(key_blockacq_lifetime)
 #define	V_key_preferred_oldsa	VNET(key_preferred_oldsa)
 
-static VNET_DEFINE(u_int32_t, acq_seq) = 0;
+VNET_DEFINE_STATIC(u_int32_t, acq_seq) = 0;
 #define	V_acq_seq		VNET(acq_seq)
 
-static VNET_DEFINE(uint32_t, sp_genid) = 0;
+VNET_DEFINE_STATIC(uint32_t, sp_genid) = 0;
 #define	V_sp_genid		VNET(sp_genid)
 
 /* SPD */
 TAILQ_HEAD(secpolicy_queue, secpolicy);
 LIST_HEAD(secpolicy_list, secpolicy);
-static VNET_DEFINE(struct secpolicy_queue, sptree[IPSEC_DIR_MAX]);
-static VNET_DEFINE(struct secpolicy_queue, sptree_ifnet[IPSEC_DIR_MAX]);
+VNET_DEFINE_STATIC(struct secpolicy_queue, sptree[IPSEC_DIR_MAX]);
+VNET_DEFINE_STATIC(struct secpolicy_queue, sptree_ifnet[IPSEC_DIR_MAX]);
 static struct rmlock sptree_lock;
 #define	V_sptree		VNET(sptree)
 #define	V_sptree_ifnet		VNET(sptree_ifnet)
@@ -163,8 +163,8 @@ static struct rmlock sptree_lock;
 #define	SPTREE_UNLOCK_ASSERT()  rm_assert(&sptree_lock, RA_UNLOCKED)
 
 /* Hash table for lookup SP using unique id */
-static VNET_DEFINE(struct secpolicy_list *, sphashtbl);
-static VNET_DEFINE(u_long, sphash_mask);
+VNET_DEFINE_STATIC(struct secpolicy_list *, sphashtbl);
+VNET_DEFINE_STATIC(u_long, sphash_mask);
 #define	V_sphashtbl		VNET(sphashtbl)
 #define	V_sphash_mask		VNET(sphash_mask)
 
@@ -184,19 +184,19 @@ LIST_HEAD(spdcache_entry_list, spdcache_entry);
 
 #define	SPDCACHE_MAX_ENTRIES_PER_HASH	8
 
-static VNET_DEFINE(u_int, key_spdcache_maxentries) = 0;
+VNET_DEFINE_STATIC(u_int, key_spdcache_maxentries) = 0;
 #define	V_key_spdcache_maxentries	VNET(key_spdcache_maxentries)
-static VNET_DEFINE(u_int, key_spdcache_threshold) = 32;
+VNET_DEFINE_STATIC(u_int, key_spdcache_threshold) = 32;
 #define	V_key_spdcache_threshold	VNET(key_spdcache_threshold)
-static VNET_DEFINE(unsigned long, spd_size) = 0;
+VNET_DEFINE_STATIC(unsigned long, spd_size) = 0;
 #define	V_spd_size		VNET(spd_size)
 
 #define SPDCACHE_ENABLED()	(V_key_spdcache_maxentries != 0)
 #define SPDCACHE_ACTIVE() \
 	(SPDCACHE_ENABLED() && V_spd_size >= V_key_spdcache_threshold)
 
-static VNET_DEFINE(struct spdcache_entry_list *, spdcachehashtbl);
-static VNET_DEFINE(u_long, spdcachehash_mask);
+VNET_DEFINE_STATIC(struct spdcache_entry_list *, spdcachehashtbl);
+VNET_DEFINE_STATIC(u_long, spdcachehash_mask);
 #define	V_spdcachehashtbl	VNET(spdcachehashtbl)
 #define	V_spdcachehash_mask	VNET(spdcachehash_mask)
 
@@ -205,7 +205,7 @@ static VNET_DEFINE(u_long, spdcachehash_mask);
 	    V_spdcachehash_mask)
 
 /* Each cache line is protected by a mutex */
-static VNET_DEFINE(struct mtx *, spdcache_lock);
+VNET_DEFINE_STATIC(struct mtx *, spdcache_lock);
 #define	V_spdcache_lock		VNET(spdcache_lock)
 
 #define	SPDCACHE_LOCK_INIT(a) \
@@ -218,7 +218,7 @@ static VNET_DEFINE(struct mtx *, spdcache_lock);
 /* SAD */
 TAILQ_HEAD(secashead_queue, secashead);
 LIST_HEAD(secashead_list, secashead);
-static VNET_DEFINE(struct secashead_queue, sahtree);
+VNET_DEFINE_STATIC(struct secashead_queue, sahtree);
 static struct rmlock sahtree_lock;
 #define	V_sahtree		VNET(sahtree)
 #define	SAHTREE_LOCK_INIT()	rm_init(&sahtree_lock, "sahtree")
@@ -233,8 +233,8 @@ static struct rmlock sahtree_lock;
 #define	SAHTREE_UNLOCK_ASSERT()	rm_assert(&sahtree_lock, RA_UNLOCKED)
 
 /* Hash table for lookup in SAD using SA addresses */
-static VNET_DEFINE(struct secashead_list *, sahaddrhashtbl);
-static VNET_DEFINE(u_long, sahaddrhash_mask);
+VNET_DEFINE_STATIC(struct secashead_list *, sahaddrhashtbl);
+VNET_DEFINE_STATIC(u_long, sahaddrhash_mask);
 #define	V_sahaddrhashtbl	VNET(sahaddrhashtbl)
 #define	V_sahaddrhash_mask	VNET(sahaddrhash_mask)
 
@@ -248,8 +248,8 @@ static VNET_DEFINE(u_long, sahaddrhash_mask);
 
 /* Hash table for lookup in SAD using SPI */
 LIST_HEAD(secasvar_list, secasvar);
-static VNET_DEFINE(struct secasvar_list *, savhashtbl);
-static VNET_DEFINE(u_long, savhash_mask);
+VNET_DEFINE_STATIC(struct secasvar_list *, savhashtbl);
+VNET_DEFINE_STATIC(u_long, savhash_mask);
 #define	V_savhashtbl		VNET(savhashtbl)
 #define	V_savhash_mask		VNET(savhash_mask)
 #define	SAVHASH_NHASH_LOG2	7
@@ -298,7 +298,7 @@ key_u32hash(uint32_t val)
 }
 
 							/* registed list */
-static VNET_DEFINE(LIST_HEAD(_regtree, secreg), regtree[SADB_SATYPE_MAX + 1]);
+VNET_DEFINE_STATIC(LIST_HEAD(_regtree, secreg), regtree[SADB_SATYPE_MAX + 1]);
 #define	V_regtree		VNET(regtree)
 static struct mtx regtree_lock;
 #define	REGTREE_LOCK_INIT() \
@@ -310,7 +310,7 @@ static struct mtx regtree_lock;
 
 /* Acquiring list */
 LIST_HEAD(secacq_list, secacq);
-static VNET_DEFINE(struct secacq_list, acqtree);
+VNET_DEFINE_STATIC(struct secacq_list, acqtree);
 #define	V_acqtree		VNET(acqtree)
 static struct mtx acq_lock;
 #define	ACQ_LOCK_INIT() \
@@ -321,14 +321,14 @@ static struct mtx acq_lock;
 #define	ACQ_LOCK_ASSERT()	mtx_assert(&acq_lock, MA_OWNED)
 
 /* Hash table for lookup in ACQ list using SA addresses */
-static VNET_DEFINE(struct secacq_list *, acqaddrhashtbl);
-static VNET_DEFINE(u_long, acqaddrhash_mask);
+VNET_DEFINE_STATIC(struct secacq_list *, acqaddrhashtbl);
+VNET_DEFINE_STATIC(u_long, acqaddrhash_mask);
 #define	V_acqaddrhashtbl	VNET(acqaddrhashtbl)
 #define	V_acqaddrhash_mask	VNET(acqaddrhash_mask)
 
 /* Hash table for lookup in ACQ list using SEQ number */
-static VNET_DEFINE(struct secacq_list *, acqseqhashtbl);
-static VNET_DEFINE(u_long, acqseqhash_mask);
+VNET_DEFINE_STATIC(struct secacq_list *, acqseqhashtbl);
+VNET_DEFINE_STATIC(u_long, acqseqhash_mask);
 #define	V_acqseqhashtbl		VNET(acqseqhashtbl)
 #define	V_acqseqhash_mask	VNET(acqseqhash_mask)
 
@@ -344,7 +344,7 @@ static VNET_DEFINE(u_long, acqseqhash_mask);
 #define	ACQSEQHASH_HASH(seq)	\
     &V_acqseqhashtbl[ACQSEQHASH_HASHVAL(seq)]
 							/* SP acquiring list */
-static VNET_DEFINE(LIST_HEAD(_spacqtree, secspacq), spacqtree);
+VNET_DEFINE_STATIC(LIST_HEAD(_spacqtree, secspacq), spacqtree);
 #define	V_spacqtree		VNET(spacqtree)
 static struct mtx spacq_lock;
 #define	SPACQ_LOCK_INIT() \
@@ -433,9 +433,9 @@ _Static_assert(sizeof(maxsize)/sizeof(int) == SADB_EXT_MAX + 1, "minsize size mi
 	((_mhp)->extlen[(_ext)] > maxsize[(_ext)])))
 #define	SADB_CHECKHDR(_mhp, _ext)	((_mhp)->ext[(_ext)] == NULL)
 
-static VNET_DEFINE(int, ipsec_esp_keymin) = 256;
-static VNET_DEFINE(int, ipsec_esp_auth) = 0;
-static VNET_DEFINE(int, ipsec_ah_keymin) = 128;
+VNET_DEFINE_STATIC(int, ipsec_esp_keymin) = 256;
+VNET_DEFINE_STATIC(int, ipsec_esp_auth) = 0;
+VNET_DEFINE_STATIC(int, ipsec_ah_keymin) = 128;
 
 #define	V_ipsec_esp_keymin	VNET(ipsec_esp_keymin)
 #define	V_ipsec_esp_auth	VNET(ipsec_esp_auth)
@@ -531,16 +531,8 @@ MALLOC_DEFINE(M_IPSEC_SAQ, "ipsec-saq", "ipsec sa acquire");
 MALLOC_DEFINE(M_IPSEC_SAR, "ipsec-reg", "ipsec sa acquire");
 MALLOC_DEFINE(M_IPSEC_SPDCACHE, "ipsec-spdcache", "ipsec SPD cache");
 
-static VNET_DEFINE(uma_zone_t, key_lft_zone);
+VNET_DEFINE_STATIC(uma_zone_t, key_lft_zone);
 #define	V_key_lft_zone		VNET(key_lft_zone)
-
-static LIST_HEAD(xforms_list, xformsw) xforms = LIST_HEAD_INITIALIZER();
-static struct mtx xforms_lock;
-#define	XFORMS_LOCK_INIT()	\
-    mtx_init(&xforms_lock, "xforms_list", "IPsec transforms list", MTX_DEF)
-#define	XFORMS_LOCK_DESTROY()	mtx_destroy(&xforms_lock)
-#define	XFORMS_LOCK()		mtx_lock(&xforms_lock)
-#define	XFORMS_UNLOCK()		mtx_unlock(&xforms_lock)
 
 /*
  * set parameters into secpolicyindex buffer.
@@ -717,7 +709,6 @@ static int key_delete(struct socket *, struct mbuf *,
 	const struct sadb_msghdr *);
 static int key_delete_all(struct socket *, struct mbuf *,
 	const struct sadb_msghdr *, struct secasindex *);
-static void key_delete_xform(const struct xformsw *);
 static int key_get(struct socket *, struct mbuf *,
 	const struct sadb_msghdr *);
 
@@ -750,7 +741,6 @@ static int key_validate_ext(const struct sadb_ext *, int);
 static int key_align(struct mbuf *, struct sadb_msghdr *);
 static struct mbuf *key_setlifetime(struct seclifetime *, uint16_t);
 static struct mbuf *key_setkey(struct seckey *, uint16_t);
-static int xform_init(struct secasvar *, u_short);
 
 static void spdcache_init(void);
 static void spdcache_clear(void);
@@ -758,8 +748,9 @@ static struct spdcache_entry *spdcache_entry_alloc(
 	const struct secpolicyindex *spidx,
 	struct secpolicy *policy);
 static void spdcache_entry_free(struct spdcache_entry *entry);
+#ifdef VIMAGE
 static void spdcache_destroy(void);
-
+#endif
 
 #define	DBG_IPSEC_INITREF(t, p)	do {				\
 	refcount_init(&(p)->refcnt, 1);				\
@@ -929,13 +920,13 @@ key_allocsp(struct secpolicyindex *spidx, u_int dir)
 		if (entry->sp != NULL)
 			SP_ADDREF(sp);
 
-		IPSECSTAT_INC(ips_spdcache_hits);
+		/* IPSECSTAT_INC(ips_spdcache_hits); */
 
 		SPDCACHE_UNLOCK(hashv);
 		goto out;
 	}
 
-	IPSECSTAT_INC(ips_spdcache_misses);
+	/* IPSECSTAT_INC(ips_spdcache_misses); */
 
 	sp = key_do_allocsp(spidx, dir);
 	entry = spdcache_entry_alloc(spidx, sp);
@@ -2956,7 +2947,7 @@ key_newsav(const struct sadb_msghdr *mhp, struct secasindex *saidx,
 		goto done;
 	}
 	mtx_init(sav->lock, "ipsec association", NULL, MTX_DEF);
-	sav->lft_c = uma_zalloc(V_key_lft_zone, M_NOWAIT);
+	sav->lft_c = uma_zalloc_pcpu(V_key_lft_zone, M_NOWAIT);
 	if (sav->lft_c == NULL) {
 		*errp = ENOBUFS;
 		goto done;
@@ -3048,7 +3039,7 @@ done:
 				free(sav->lock, M_IPSEC_MISC);
 			}
 			if (sav->lft_c != NULL)
-				uma_zfree(V_key_lft_zone, sav->lft_c);
+				uma_zfree_pcpu(V_key_lft_zone, sav->lft_c);
 			free(sav, M_IPSEC_SA), sav = NULL;
 		}
 		if (sah != NULL)
@@ -6166,7 +6157,7 @@ key_delete_all(struct socket *so, struct mbuf *m,
  * Larval SAs have not initialized tdb_xform, so it is safe to leave them
  * here when xform disappears.
  */
-static void
+void
 key_delete_xform(const struct xformsw *xsp)
 {
 	struct secasvar_queue drainq;
@@ -6694,7 +6685,9 @@ key_acquire(const struct secasindex *saidx, struct secpolicy *sp)
 
 	/* XXX proxy address (optional) */
 
-	/* set sadb_x_policy */
+	/*
+	 * Set sadb_x_policy. This is KAME extension to RFC2367.
+	 */
 	if (sp != NULL) {
 		m = key_setsadbxpolicy(sp->policy, sp->spidx.dir, sp->id,
 		    sp->priority);
@@ -6705,6 +6698,18 @@ key_acquire(const struct secasindex *saidx, struct secpolicy *sp)
 		m_cat(result, m);
 	}
 
+	/*
+	 * Set sadb_x_sa2 extension if saidx->reqid is not zero.
+	 * This is FreeBSD extension to RFC2367.
+	 */
+	if (saidx->reqid != 0) {
+		m = key_setsadbxsa2(saidx->mode, 0, saidx->reqid);
+		if (m == NULL) {
+			error = ENOBUFS;
+			goto fail;
+		}
+		m_cat(result, m);
+	}
 	/* XXX identity (optional) */
 #if 0
 	if (idexttype && fqdn) {
@@ -8282,6 +8287,7 @@ spdcache_clear(void)
 	}
 }
 
+#ifdef VIMAGE
 void
 spdcache_destroy(void)
 {
@@ -8297,7 +8303,7 @@ spdcache_destroy(void)
 		free(V_spdcache_lock, M_IPSEC_SPDCACHE);
 	}
 }
-
+#endif
 void
 key_init(void)
 {
@@ -8333,7 +8339,6 @@ key_init(void)
 	if (!IS_DEFAULT_VNET(curvnet))
 		return;
 
-	XFORMS_LOCK_INIT();
 	SPTREE_LOCK_INIT();
 	REGTREE_LOCK_INIT();
 	SAHTREE_LOCK_INIT();
@@ -8456,7 +8461,6 @@ key_destroy(void)
 #ifndef IPSEC_DEBUG2
 	callout_drain(&key_timer);
 #endif
-	XFORMS_LOCK_DESTROY();
 	SPTREE_LOCK_DESTROY();
 	REGTREE_LOCK_DESTROY();
 	SAHTREE_LOCK_DESTROY();
@@ -8613,72 +8617,5 @@ comp_algorithm_lookup(int alg)
 		if (alg == supported_calgs[i].sadb_alg)
 			return (supported_calgs[i].xform);
 	return (NULL);
-}
-
-/*
- * Register a transform.
- */
-static int
-xform_register(struct xformsw* xsp)
-{
-	struct xformsw *entry;
-
-	XFORMS_LOCK();
-	LIST_FOREACH(entry, &xforms, chain) {
-		if (entry->xf_type == xsp->xf_type) {
-			XFORMS_UNLOCK();
-			return (EEXIST);
-		}
-	}
-	LIST_INSERT_HEAD(&xforms, xsp, chain);
-	XFORMS_UNLOCK();
-	return (0);
-}
-
-void
-xform_attach(void *data)
-{
-	struct xformsw *xsp = (struct xformsw *)data;
-
-	if (xform_register(xsp) != 0)
-		printf("%s: failed to register %s xform\n", __func__,
-		    xsp->xf_name);
-}
-
-void
-xform_detach(void *data)
-{
-	struct xformsw *xsp = (struct xformsw *)data;
-
-	XFORMS_LOCK();
-	LIST_REMOVE(xsp, chain);
-	XFORMS_UNLOCK();
-
-	/* Delete all SAs related to this xform. */
-	key_delete_xform(xsp);
-}
-
-/*
- * Initialize transform support in an sav.
- */
-static int
-xform_init(struct secasvar *sav, u_short xftype)
-{
-	struct xformsw *entry;
-	int ret;
-
-	IPSEC_ASSERT(sav->tdb_xform == NULL,
-	    ("tdb_xform is already initialized"));
-
-	ret = EINVAL;
-	XFORMS_LOCK();
-	LIST_FOREACH(entry, &xforms, chain) {
-	    if (entry->xf_type == xftype) {
-		    ret = (*entry->xf_init)(sav, entry);
-		    break;
-	    }
-	}
-	XFORMS_UNLOCK();
-	return (ret);
 }
 

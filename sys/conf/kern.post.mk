@@ -14,6 +14,7 @@ MKMODULESENV+=	DESTDIR="${DESTDIR}"
 .endif
 SYSDIR?= ${S:C;^[^/];${.CURDIR}/&;:tA}
 MKMODULESENV+=	KERNBUILDDIR="${.CURDIR}" SYSDIR="${SYSDIR}"
+MKMODULESENV+=  MODULE_TIED=yes
 
 .if defined(CONF_CFLAGS)
 MKMODULESENV+=	CONF_CFLAGS="${CONF_CFLAGS}"
@@ -27,6 +28,10 @@ MKMODULESENV+=	WITH_CTF="${WITH_CTF}"
 MKMODULESENV+=	WITH_EXTRA_TCP_STACKS="${WITH_EXTRA_TCP_STACKS}"
 .endif
 
+.if defined(SAN_CFLAGS)
+MKMODULESENV+=	SAN_CFLAGS="${SAN_CFLAGS}"
+.endif
+
 # Allow overriding the kernel debug directory, so kernel and user debug may be
 # installed in different directories. Setting it to "" restores the historical
 # behavior of installing debug files in the kernel directory.
@@ -34,14 +39,33 @@ KERN_DEBUGDIR?=	${DEBUGDIR}
 
 .MAIN: all
 
+.if !defined(NO_MODULES)
+# Default prefix used for modules installed from ports
+LOCALBASE?=	/usr/local
+
+LOCAL_MODULES_DIR?= ${LOCALBASE}/sys/modules
+
+# Default to installing all modules installed by ports unless overridden
+# by the user.
+.if !defined(LOCAL_MODULES) && exists($LOCAL_MODULES_DIR)
+LOCAL_MODULES!= ls ${LOCAL_MODULES_DIR}
+.endif
+.endif
+
 .for target in all clean cleandepend cleandir clobber depend install \
     ${_obj} reinstall tags
 ${target}: kernel-${target}
-.if !defined(MODULES_WITH_WORLD) && !defined(NO_MODULES) && exists($S/modules)
+.if !defined(NO_MODULES)
 ${target}: modules-${target}
 modules-${target}:
+.if !defined(MODULES_WITH_WORLD) && exists($S/modules)
 	cd $S/modules; ${MKMODULESENV} ${MAKE} \
 	    ${target:S/^reinstall$/install/:S/^clobber$/cleandir/}
+.endif
+.for module in ${LOCAL_MODULES}
+	cd ${LOCAL_MODULES_DIR}/${module}; ${MKMODULESENV} ${MAKE} \
+	    ${target:S/^reinstall$/install/:S/^clobber$/cleandir/}
+.endfor
 .endif
 .endfor
 
@@ -50,8 +74,6 @@ modules-${target}:
 #
 # The ports tree needs some environment variables defined to match the new kernel
 #
-# Ports search for some dependencies in PATH, so add the location of the installed files
-LOCALBASE?=	/usr/local
 # SRC_BASE is how the ports tree refers to the location of the base source files
 .if !defined(SRC_BASE)
 SRC_BASE=	${SYSDIR:H:tA}
@@ -63,6 +85,9 @@ OSRELDATE!=	awk '/^\#define[[:space:]]*__FreeBSD_version/ { print $$3 }' \
 		    ${MAKEOBJDIRPREFIX}${SRC_BASE}/include/osreldate.h
 .endif
 # Keep the related ports builds in the obj directory so that they are only rebuilt once per kernel build
+#
+# Ports search for some dependencies in PATH, so add the location of the
+# installed files
 WRKDIRPREFIX?=	${.OBJDIR}
 PORTSMODULESENV=\
 	env \
@@ -109,7 +134,7 @@ kernel-clobber:
 
 kernel-obj:
 
-.if !defined(MODULES_WITH_WORLD) && !defined(NO_MODULES) && exists($S/modules)
+.if !defined(NO_MODULES)
 modules: modules-all
 
 .if !defined(NO_MODULES_OBJ)
@@ -156,7 +181,7 @@ ${FULLKERNEL}: ${SYSTEM_DEP} vers.o
 .endif
 	${SYSTEM_LD_TAIL}
 
-OBJS_DEPEND_GUESS+=	assym.inc vnode_if.h ${BEFORE_DEPEND:M*.h} \
+OBJS_DEPEND_GUESS+=	offset.inc assym.inc vnode_if.h ${BEFORE_DEPEND:M*.h} \
 			${MFILES:T:S/.m$/.h/}
 
 .for mfile in ${MFILES}
@@ -185,13 +210,27 @@ hack.pico: Makefile
 	${CC} ${HACK_EXTRA_FLAGS} -nostdlib hack.c -o hack.pico
 	rm -f hack.c
 
-assym.inc: $S/kern/genassym.sh genassym.o
+offset.inc: $S/kern/genoffset.sh genoffset.o
+	NM='${NM}' NMFLAGS='${NMFLAGS}' sh $S/kern/genoffset.sh genoffset.o > ${.TARGET}
+
+genoffset.o: $S/kern/genoffset.c
+	${CC} -c ${CFLAGS:N-flto:N-fno-common} $S/kern/genoffset.c
+
+# genoffset_test.o is not actually used for anything - the point of compiling it
+# is to exercise the CTASSERT that checks that the offsets in the offset.inc
+# _lite struct(s) match those in the original(s). 
+genoffset_test.o: $S/kern/genoffset.c offset.inc
+	${CC} -c ${CFLAGS:N-flto:N-fno-common} -DOFFSET_TEST \
+	    $S/kern/genoffset.c -o ${.TARGET}
+
+assym.inc: $S/kern/genassym.sh genassym.o genoffset_test.o
 	NM='${NM}' NMFLAGS='${NMFLAGS}' sh $S/kern/genassym.sh genassym.o > ${.TARGET}
 
-genassym.o: $S/$M/$M/genassym.c
+genassym.o: $S/$M/$M/genassym.c  offset.inc
 	${CC} -c ${CFLAGS:N-flto:N-fno-common} $S/$M/$M/genassym.c
 
-${SYSTEM_OBJS} genassym.o vers.o: opt_global.h
+OBJS_DEPEND_GUESS+= opt_global.h
+genoffset.o genassym.o vers.o: opt_global.h
 
 .if !empty(.MAKE.MODE:Unormal:Mmeta) && empty(.MAKE.MODE:Unormal:Mnofilemon)
 _meta_filemon=	1
@@ -213,10 +252,11 @@ _SKIP_DEPEND=	1
 .endif
 
 kernel-depend: .depend
-SRCS=	assym.inc vnode_if.h ${BEFORE_DEPEND} ${CFILES} \
+SRCS=	assym.inc offset.inc vnode_if.h ${BEFORE_DEPEND} ${CFILES} \
 	${SYSTEM_CFILES} ${GEN_CFILES} ${SFILES} \
 	${MFILES:T:S/.m$/.h/}
-DEPENDOBJS+=	${SYSTEM_OBJS} genassym.o
+DEPENDOBJS+=	${SYSTEM_OBJS} genassym.o genoffset.o genoffset_test.o
+DEPENDOBJS+=	${CLEAN:M*.o}
 DEPENDFILES=	${DEPENDOBJS:O:u:C/^/.depend./}
 .if ${MAKE_VERSION} < 20160220
 DEPEND_MP?=	-MP
@@ -366,7 +406,7 @@ config.o env.o hints.o vers.o vnode_if.o:
 	${NORMAL_CTFCONVERT}
 
 .if ${MK_REPRODUCIBLE_BUILD} != "no"
-REPRO_FLAG="-r"
+REPRO_FLAG="-R"
 .endif
 vers.c: $S/conf/newvers.sh $S/sys/param.h ${SYSTEM_DEP}
 	MAKE="${MAKE}" sh $S/conf/newvers.sh ${REPRO_FLAG} ${KERN_IDENT}

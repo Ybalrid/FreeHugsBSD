@@ -39,6 +39,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/malloc.h>
 #include <sys/lock.h>
 #include <sys/mutex.h>
+#include <sys/sysctl.h>
 #include <machine/stdarg.h>
 #include <machine/resource.h>
 #include <machine/bus.h>
@@ -80,6 +81,8 @@ static void ahci_stop(struct ahci_channel *ch);
 static void ahci_clo(struct ahci_channel *ch);
 static void ahci_start_fr(struct ahci_channel *ch);
 static void ahci_stop_fr(struct ahci_channel *ch);
+static int ahci_phy_check_events(struct ahci_channel *ch, u_int32_t serr);
+static uint32_t ahci_ch_detval(struct ahci_channel *ch, uint32_t val);
 
 static int ahci_sata_connect(struct ahci_channel *ch);
 static int ahci_sata_phy_reset(struct ahci_channel *ch);
@@ -99,6 +102,13 @@ static MALLOC_DEFINE(M_AHCI, "AHCI driver", "AHCI driver data buffers");
 #define RECOVERY_READ_LOG	1
 #define RECOVERY_REQUEST_SENSE	2
 #define recovery_slot		spriv_field1
+
+static uint32_t
+ahci_ch_detval(struct ahci_channel *ch, uint32_t val)
+{
+
+	return ch->disablephy ? ATA_SC_DET_DISABLE : val;
+}
 
 int
 ahci_ctlr_setup(device_t dev)
@@ -665,11 +675,38 @@ ahci_ch_probe(device_t dev)
 }
 
 static int
+ahci_ch_disablephy_proc(SYSCTL_HANDLER_ARGS)
+{
+	struct ahci_channel *ch;
+	int error, value;
+
+	ch = arg1;
+	value = ch->disablephy;
+	error = sysctl_handle_int(oidp, &value, 0, req);
+	if (error != 0 || req->newptr == NULL || (value != 0 && value != 1))
+		return (error);
+
+	mtx_lock(&ch->mtx);
+	ch->disablephy = value;
+	if (value) {
+		ahci_ch_deinit(ch->dev);
+	} else {
+		ahci_ch_init(ch->dev);
+		ahci_phy_check_events(ch, ATA_SE_PHY_CHANGED | ATA_SE_EXCHANGED);
+	}
+	mtx_unlock(&ch->mtx);
+
+	return (0);
+}
+
+static int
 ahci_ch_attach(device_t dev)
 {
 	struct ahci_controller *ctlr = device_get_softc(device_get_parent(dev));
 	struct ahci_channel *ch = device_get_softc(dev);
 	struct cam_devq *devq;
+	struct sysctl_ctx_list *ctx;
+	struct sysctl_oid *tree;
 	int rid, error, i, sata_rev = 0;
 	u_int32_t version;
 
@@ -787,6 +824,11 @@ ahci_ch_attach(device_t dev)
 		    ahci_ch_pm, ch);
 	}
 	mtx_unlock(&ch->mtx);
+	ctx = device_get_sysctl_ctx(dev);
+	tree = device_get_sysctl_tree(dev);
+	SYSCTL_ADD_PROC(ctx, SYSCTL_CHILDREN(tree), OID_AUTO, "disable_phy",
+	    CTLFLAG_RW | CTLTYPE_UINT, ch, 0, ahci_ch_disablephy_proc, "IU",
+	    "Disable PHY");
 	return (0);
 
 err3:
@@ -1523,6 +1565,7 @@ ahci_execute_transaction(struct ahci_slot *slot)
 	int fis_size, i, softreset;
 	uint8_t *fis = ch->dma.rfis + 0x40;
 	uint8_t val;
+	uint16_t cmd_flags;
 
 	/* Get a piece of the workspace for this request */
 	ctp = (struct ahci_cmd_tab *)
@@ -1536,12 +1579,12 @@ ahci_execute_transaction(struct ahci_slot *slot)
 	/* Setup the command list entry */
 	clp = (struct ahci_cmd_list *)
 	    (ch->dma.work + AHCI_CL_OFFSET + (AHCI_CL_SIZE * slot->slot));
-	clp->cmd_flags = htole16(
+	cmd_flags =
 		    (ccb->ccb_h.flags & CAM_DIR_OUT ? AHCI_CMD_WRITE : 0) |
 		    (ccb->ccb_h.func_code == XPT_SCSI_IO ?
 		     (AHCI_CMD_ATAPI | AHCI_CMD_PREFETCH) : 0) |
 		    (fis_size / sizeof(u_int32_t)) |
-		    (port << 12));
+		    (port << 12);
 	clp->prd_length = htole16(slot->dma.nsegs);
 	/* Special handling for Soft Reset command. */
 	if ((ccb->ccb_h.func_code == XPT_ATA_IO) &&
@@ -1552,7 +1595,7 @@ ahci_execute_transaction(struct ahci_slot *slot)
 			ahci_stop(ch);
 			ahci_clo(ch);
 			ahci_start(ch, 0);
-			clp->cmd_flags |= AHCI_CMD_RESET | AHCI_CMD_CLR_BUSY;
+			cmd_flags |= AHCI_CMD_RESET | AHCI_CMD_CLR_BUSY;
 		} else {
 			softreset = 2;
 			/* Prepare FIS receive area for check. */
@@ -1562,6 +1605,7 @@ ahci_execute_transaction(struct ahci_slot *slot)
 	} else
 		softreset = 0;
 	clp->bytecount = 0;
+	clp->cmd_flags = htole16(cmd_flags);
 	clp->cmd_table_phys = htole64(ch->dma.work_bus + AHCI_CT_OFFSET +
 				  (AHCI_CT_SIZE * slot->slot));
 	bus_dmamap_sync(ch->dma.work_tag, ch->dma.work_map,
@@ -2495,7 +2539,7 @@ static int
 ahci_sata_phy_reset(struct ahci_channel *ch)
 {
 	int sata_rev;
-	uint32_t val;
+	uint32_t val, detval;
 
 	if (ch->listening) {
 		val = ATA_INL(ch->r_mem, AHCI_P_CMD);
@@ -2512,12 +2556,14 @@ ahci_sata_phy_reset(struct ahci_channel *ch)
 		val = ATA_SC_SPD_SPEED_GEN3;
 	else
 		val = 0;
+	detval = ahci_ch_detval(ch, ATA_SC_DET_RESET);
 	ATA_OUTL(ch->r_mem, AHCI_P_SCTL,
-	    ATA_SC_DET_RESET | val |
+	    detval | val |
 	    ATA_SC_IPM_DIS_PARTIAL | ATA_SC_IPM_DIS_SLUMBER);
 	DELAY(1000);
+	detval = ahci_ch_detval(ch, ATA_SC_DET_IDLE);
 	ATA_OUTL(ch->r_mem, AHCI_P_SCTL,
-	    ATA_SC_DET_IDLE | val | ((ch->pm_level > 0) ? 0 :
+	    detval | val | ((ch->pm_level > 0) ? 0 :
 	    (ATA_SC_IPM_DIS_PARTIAL | ATA_SC_IPM_DIS_SLUMBER)));
 	if (!ahci_sata_connect(ch)) {
 		if (ch->caps & AHCI_CAP_SSS) {

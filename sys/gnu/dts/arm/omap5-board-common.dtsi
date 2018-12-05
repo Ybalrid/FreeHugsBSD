@@ -364,7 +364,7 @@
 		pinctrl-names = "default";
 		pinctrl-0 = <&wlcore_irq_pin>;
 		interrupt-parent = <&gpio1>;
-		interrupts = <14 IRQ_TYPE_LEVEL_HIGH>;	/* gpio 14 */
+		interrupts = <14 IRQ_TYPE_EDGE_RISING>;	/* gpio 14 */
 		ref-clock-frequency = <26000000>;
 	};
 };
@@ -659,8 +659,8 @@
 		v2v1-supply = <&smps9_reg>;
 		enable-active-high;
 
-		clocks = <&clk32kgaudio>;
-		clock-names = "clk32k";
+		clocks = <&clk32kgaudio>, <&fref_xtal_ck>;
+		clock-names = "clk32k", "mclk";
 	};
 };
 

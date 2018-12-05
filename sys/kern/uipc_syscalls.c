@@ -58,6 +58,8 @@ __FBSDID("$FreeBSD$");
 #include <sys/socketvar.h>
 #include <sys/syscallsubr.h>
 #include <sys/uio.h>
+#include <sys/un.h>
+#include <sys/unpcb.h>
 #ifdef KTRACE
 #include <sys/ktrace.h>
 #endif
@@ -453,9 +455,7 @@ sys_accept4(td, uap)
 
 #ifdef COMPAT_OLDSOCK
 int
-oaccept(td, uap)
-	struct thread *td;
-	struct accept_args *uap;
+oaccept(struct thread *td, struct oaccept_args *uap)
 {
 
 	return (accept1(td, uap->s, uap->name, uap->anamelen,
@@ -612,6 +612,15 @@ kern_socketpair(struct thread *td, int domain, int type, int protocol,
 		 error = soconnect2(so2, so1);
 		 if (error != 0)
 			goto free4;
+	} else if (so1->so_proto->pr_flags & PR_CONNREQUIRED) {
+		struct unpcb *unp, *unp2;
+		unp = sotounpcb(so1);
+		unp2 = sotounpcb(so2);
+		/* 
+		 * No need to lock the unps, because the sockets are brand-new.
+		 * No other threads can be using them yet
+		 */
+		unp_copy_peercred(td, unp, unp2, unp);
 	}
 	finit(fp1, FREAD | FWRITE | fflag, DTYPE_SOCKET, fp1->f_data,
 	    &socketops);
@@ -814,7 +823,7 @@ sys_sendto(struct thread *td, struct sendto_args *uap)
 	struct msghdr msg;
 	struct iovec aiov;
 
-	msg.msg_name = uap->to;
+	msg.msg_name = __DECONST(void *, uap->to);
 	msg.msg_namelen = uap->tolen;
 	msg.msg_iov = &aiov;
 	msg.msg_iovlen = 1;
@@ -822,7 +831,7 @@ sys_sendto(struct thread *td, struct sendto_args *uap)
 #ifdef COMPAT_OLDSOCK
 	msg.msg_flags = 0;
 #endif
-	aiov.iov_base = uap->buf;
+	aiov.iov_base = __DECONST(void *, uap->buf);
 	aiov.iov_len = uap->len;
 	return (sendit(td, uap->s, &msg, uap->flags));
 }
@@ -838,7 +847,7 @@ osend(struct thread *td, struct osend_args *uap)
 	msg.msg_namelen = 0;
 	msg.msg_iov = &aiov;
 	msg.msg_iovlen = 1;
-	aiov.iov_base = uap->buf;
+	aiov.iov_base = __DECONST(void *, uap->buf);
 	aiov.iov_len = uap->len;
 	msg.msg_control = 0;
 	msg.msg_flags = 0;
@@ -894,7 +903,7 @@ kern_recvit(struct thread *td, int s, struct msghdr *mp, enum uio_seg fromseg,
 {
 	struct uio auio;
 	struct iovec *iov;
-	struct mbuf *m, *control = NULL;
+	struct mbuf *control, *m;
 	caddr_t ctlbuf;
 	struct file *fp;
 	struct socket *so;
@@ -941,6 +950,7 @@ kern_recvit(struct thread *td, int s, struct msghdr *mp, enum uio_seg fromseg,
 	if (KTRPOINT(td, KTR_GENIO))
 		ktruio = cloneuio(&auio);
 #endif
+	control = NULL;
 	len = auio.uio_resid;
 	error = soreceive(so, &fromsa, &auio, NULL,
 	    (mp->msg_control || controlp) ? &control : NULL,
@@ -1004,30 +1014,22 @@ kern_recvit(struct thread *td, int s, struct msghdr *mp, enum uio_seg fromseg,
 			control->m_data += sizeof (struct cmsghdr);
 		}
 #endif
-		len = mp->msg_controllen;
-		m = control;
-		mp->msg_controllen = 0;
 		ctlbuf = mp->msg_control;
-
-		while (m && len > 0) {
-			unsigned int tocopy;
-
-			if (len >= m->m_len)
-				tocopy = m->m_len;
-			else {
-				mp->msg_flags |= MSG_CTRUNC;
-				tocopy = len;
-			}
-
-			if ((error = copyout(mtod(m, caddr_t),
-					ctlbuf, tocopy)) != 0)
+		len = mp->msg_controllen;
+		mp->msg_controllen = 0;
+		for (m = control; m != NULL && len >= m->m_len; m = m->m_next) {
+			if ((error = copyout(mtod(m, caddr_t), ctlbuf,
+			    m->m_len)) != 0)
 				goto out;
 
-			ctlbuf += tocopy;
-			len -= tocopy;
-			m = m->m_next;
+			ctlbuf += m->m_len;
+			len -= m->m_len;
+			mp->msg_controllen += m->m_len;
 		}
-		mp->msg_controllen = ctlbuf - (caddr_t)mp->msg_control;
+		if (m != NULL) {
+			mp->msg_flags |= MSG_CTRUNC;
+			m_dispose_extcontrolm(m);
+		}
 	}
 out:
 	fdrop(fp, td);
@@ -1039,8 +1041,11 @@ out:
 
 	if (error == 0 && controlp != NULL)
 		*controlp = control;
-	else  if (control)
+	else if (control != NULL) {
+		if (error != 0)
+			m_dispose_extcontrolm(control);
 		m_freem(control);
+	}
 
 	return (error);
 }
@@ -1218,7 +1223,7 @@ sys_setsockopt(struct thread *td, struct setsockopt_args *uap)
 }
 
 int
-kern_setsockopt(struct thread *td, int s, int level, int name, void *val,
+kern_setsockopt(struct thread *td, int s, int level, int name, const void *val,
     enum uio_seg valseg, socklen_t valsize)
 {
 	struct socket *so;
@@ -1234,7 +1239,7 @@ kern_setsockopt(struct thread *td, int s, int level, int name, void *val,
 	sopt.sopt_dir = SOPT_SET;
 	sopt.sopt_level = level;
 	sopt.sopt_name = name;
-	sopt.sopt_val = val;
+	sopt.sopt_val = __DECONST(void *, val);
 	sopt.sopt_valsize = valsize;
 	switch (valseg) {
 	case UIO_USERSPACE:
@@ -1539,7 +1544,7 @@ sockargs(struct mbuf **mp, char *buf, socklen_t buflen, int type)
 }
 
 int
-getsockaddr(struct sockaddr **namp, caddr_t uaddr, size_t len)
+getsockaddr(struct sockaddr **namp, const struct sockaddr *uaddr, size_t len)
 {
 	struct sockaddr *sa;
 	int error;
@@ -1561,4 +1566,52 @@ getsockaddr(struct sockaddr **namp, caddr_t uaddr, size_t len)
 		*namp = sa;
 	}
 	return (error);
+}
+
+/*
+ * Dispose of externalized rights from an SCM_RIGHTS message.  This function
+ * should be used in error or truncation cases to avoid leaking file descriptors
+ * into the recipient's (the current thread's) table.
+ */
+void
+m_dispose_extcontrolm(struct mbuf *m)
+{
+	struct cmsghdr *cm;
+	struct file *fp;
+	struct thread *td;
+	socklen_t clen, datalen;
+	int error, fd, *fds, nfd;
+
+	td = curthread;
+	for (; m != NULL; m = m->m_next) {
+		if (m->m_type != MT_EXTCONTROL)
+			continue;
+		cm = mtod(m, struct cmsghdr *);
+		clen = m->m_len;
+		while (clen > 0) {
+			if (clen < sizeof(*cm))
+				panic("%s: truncated mbuf %p", __func__, m);
+			datalen = CMSG_SPACE(cm->cmsg_len - CMSG_SPACE(0));
+			if (clen < datalen)
+				panic("%s: truncated mbuf %p", __func__, m);
+
+			if (cm->cmsg_level == SOL_SOCKET &&
+			    cm->cmsg_type == SCM_RIGHTS) {
+				fds = (int *)CMSG_DATA(cm);
+				nfd = (cm->cmsg_len - CMSG_SPACE(0)) /
+				    sizeof(int);
+
+				while (nfd-- > 0) {
+					fd = *fds++;
+					error = fget(td, fd, &cap_no_rights,
+					    &fp);
+					if (error == 0)
+						fdclose(td, fp, fd);
+				}
+			}
+			clen -= datalen;
+			cm = (struct cmsghdr *)((uint8_t *)cm + datalen);
+		}
+		m_chtype(m, MT_CONTROL);
+	}
 }

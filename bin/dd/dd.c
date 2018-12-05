@@ -54,6 +54,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/disklabel.h>
 #include <sys/filio.h>
 #include <sys/mtio.h>
+#include <sys/time.h>
 
 #include <assert.h>
 #include <capsicum_helpers.h>
@@ -89,19 +90,26 @@ const	u_char *ctab;		/* conversion table */
 char	fill_char;		/* Character to fill with if defined */
 size_t	speed = 0;		/* maximum speed, in bytes per second */
 volatile sig_atomic_t need_summary;
+volatile sig_atomic_t need_progress;
 
 int
 main(int argc __unused, char *argv[])
 {
+	struct itimerval itv = { { 1, 0 }, { 1, 0 } }; /* SIGALARM every second, if needed */
+
 	(void)setlocale(LC_CTYPE, "");
 	jcl(argv);
 	setup();
 
 	caph_cache_catpages();
-	if (cap_enter() == -1 && errno != ENOSYS)
+	if (caph_enter() < 0)
 		err(1, "unable to enter capability mode");
 
 	(void)signal(SIGINFO, siginfo_handler);
+	if (ddflags & C_PROGRESS) {
+		(void)signal(SIGALRM, sigalarm_handler);
+		setitimer(ITIMER_REAL, &itv, NULL);
+	}
 	(void)signal(SIGINT, terminate);
 
 	atexit(summary);
@@ -149,7 +157,7 @@ setup(void)
 	getfdtype(&in);
 
 	cap_rights_init(&rights, CAP_READ, CAP_SEEK);
-	if (cap_rights_limit(in.fd, &rights) == -1 && errno != ENOSYS)
+	if (caph_rights_limit(in.fd, &rights) == -1)
 		err(1, "unable to limit capability rights");
 
 	if (files_cnt > 1 && !(in.flags & ISTAPE))
@@ -180,10 +188,9 @@ setup(void)
 
 	getfdtype(&out);
 
-	if (cap_rights_limit(out.fd, &rights) == -1 && errno != ENOSYS)
+	if (caph_rights_limit(out.fd, &rights) == -1)
 		err(1, "unable to limit capability rights");
-	if (cap_ioctls_limit(out.fd, cmds, nitems(cmds)) == -1 &&
-	    errno != ENOSYS)
+	if (caph_ioctls_limit(out.fd, cmds, nitems(cmds)) == -1)
 		err(1, "unable to limit capability rights");
 
 	if (in.fd != STDIN_FILENO && out.fd != STDIN_FILENO) {
@@ -458,9 +465,10 @@ dd_in(void)
 
 		in.dbp += in.dbrcnt;
 		(*cfunc)();
-		if (need_summary) {
+		if (need_summary)
 			summary();
-		}
+		if (need_progress)
+			progress();
 	}
 }
 
@@ -503,7 +511,7 @@ void
 dd_out(int force)
 {
 	u_char *outp;
-	size_t cnt, i, n;
+	size_t cnt, n;
 	ssize_t nw;
 	static int warned;
 	int sparse;
@@ -536,12 +544,8 @@ dd_out(int force)
 		do {
 			sparse = 0;
 			if (ddflags & C_SPARSE) {
-				sparse = 1;	/* Is buffer sparse? */
-				for (i = 0; i < cnt; i++)
-					if (outp[i] != 0) {
-						sparse = 0;
-						break;
-					}
+				/* Is buffer sparse? */
+				sparse = BISZERO(outp, cnt);
 			}
 			if (sparse && !force) {
 				pending += cnt;

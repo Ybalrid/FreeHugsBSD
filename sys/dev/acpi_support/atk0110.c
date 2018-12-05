@@ -122,11 +122,13 @@ static char* aibs_hids[] = {
 static int
 aibs_probe(device_t dev)
 {
-	if (acpi_disabled("aibs") ||
-	    ACPI_ID_PROBE(device_get_parent(dev), dev, aibs_hids) == NULL)
-		return (ENXIO);
+	int rv;
 
-	device_set_desc(dev, "ASUSTeK AI Booster (ACPI ASOC ATK0110)");
+	if (acpi_disabled("aibs"))
+		return (ENXIO);
+	rv = ACPI_ID_PROBE(device_get_parent(dev), dev, aibs_hids, NULL);
+	if (rv <= 0 )
+		device_set_desc(dev, "ASUSTeK AI Booster (ACPI ASOC ATK0110)");
 	return (0);
 }
 
@@ -453,7 +455,7 @@ static int
 aibs_sysctl(SYSCTL_HANDLER_ARGS)
 {
 	struct aibs_softc	*sc = arg1;
-	struct aibs_sensor	*sensor = (void *)arg2;
+	struct aibs_sensor	*sensor = (void *)(intptr_t)arg2;
 	int			i = oidp->oid_number;
 	ACPI_STATUS		rs;
 	ACPI_OBJECT		p, *bp;
@@ -519,7 +521,7 @@ static int
 aibs_sysctl_ggrp(SYSCTL_HANDLER_ARGS)
 {
 	struct aibs_softc	*sc = arg1;
-	struct aibs_sensor	*sensor = (void *)arg2;
+	struct aibs_sensor	*sensor = (void *)(intptr_t)arg2;
 	ACPI_STATUS		rs;
 	ACPI_OBJECT		p, *bp;
 	ACPI_OBJECT_LIST	arg;

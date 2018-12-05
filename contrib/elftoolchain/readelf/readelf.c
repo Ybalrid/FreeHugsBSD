@@ -1121,6 +1121,7 @@ note_type_freebsd(unsigned int nt)
 	case 1: return "NT_FREEBSD_ABI_TAG";
 	case 2: return "NT_FREEBSD_NOINIT_TAG";
 	case 3: return "NT_FREEBSD_ARCH_TAG";
+	case 4: return "NT_FREEBSD_FEATURE_CTL";
 	default: return (note_type_unknown(nt));
 	}
 }
@@ -1189,6 +1190,7 @@ note_type_gnu(unsigned int nt)
 	case 2: return "NT_GNU_HWCAP (Hardware capabilities)";
 	case 3: return "NT_GNU_BUILD_ID (Build id set by ld(1))";
 	case 4: return "NT_GNU_GOLD_VERSION (GNU gold version)";
+	case 5: return "NT_GNU_PROPERTY_TYPE_0";
 	default: return (note_type_unknown(nt));
 	}
 }
@@ -4718,7 +4720,7 @@ dump_dwarf_line_decoded(struct readelf *re)
 		    DW_DLV_OK)
 			dir = NULL;
 		printf("CU: ");
-		if (dir && file)
+		if (dir && file && file[0] != '/')
 			printf("%s/", dir);
 		if (file)
 			printf("%s", file);

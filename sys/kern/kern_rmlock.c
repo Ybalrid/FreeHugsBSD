@@ -494,7 +494,7 @@ _rm_unlock_hard(struct thread *td,struct rm_priotracker *tracker)
 		ts = turnstile_lookup(&rm->lock_object);
 
 		turnstile_signal(ts, TS_EXCLUSIVE_QUEUE);
-		turnstile_unpend(ts, TS_EXCLUSIVE_LOCK);
+		turnstile_unpend(ts);
 		turnstile_chain_unlock(&rm->lock_object);
 	} else
 		mtx_unlock_spin(&rm_spinlock);
@@ -742,7 +742,7 @@ _rm_assert(const struct rmlock *rm, int what, const char *file, int line)
 {
 	int count;
 
-	if (panicstr != NULL)
+	if (SCHEDULER_STOPPED())
 		return;
 	switch (what) {
 	case RA_LOCKED:

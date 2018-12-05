@@ -44,8 +44,13 @@
 #                      checkout from a version control system.  Metadata is
 #                      included if the tree is modified.
 
+<<<<<<< HEAD
 TYPE="FreeHugsBSD"
 REVISION="12.0"
+=======
+TYPE="FreeBSD"
+REVISION="13.0"
+>>>>>>> b9525e275ade105d6f9f8ed4377b3e97097f481d
 BRANCH="CURRENT"
 if [ -n "${BRANCH_OVERRIDE}" ]; then
 	BRANCH=${BRANCH_OVERRIDE}
@@ -65,7 +70,8 @@ findvcs()
 	cd ${SYSDIR}/..
 	while [ $(pwd) != "/" ]; do
 		if [ -e "./$1" ]; then
-			VCSDIR=$(pwd)"/$1"
+			VCSTOP=$(pwd)
+			VCSDIR=${VCSTOP}"/$1"
 			cd ${savedir}
 			return 0
 		fi
@@ -74,6 +80,34 @@ findvcs()
 	cd ${savedir}
 	return 1
 }
+
+git_tree_modified()
+{
+	# git diff-index lists both files that are known to have changes as
+	# well as those with metadata that does not match what is recorded in
+	# git's internal state.  The latter case is indicated by an all-zero
+	# destination file hash.
+
+	local fifo
+
+	fifo=$(mktemp -u)
+	mkfifo -m 600 $fifo
+	$git_cmd --work-tree=${VCSTOP} diff-index HEAD > $fifo &
+	while read smode dmode ssha dsha status file; do
+		if ! expr $dsha : '^00*$' >/dev/null; then
+			rm $fifo
+			return 0
+		fi
+		if ! $git_cmd --work-tree=${VCSTOP} diff --quiet -- "${file}"; then
+			rm $fifo
+			return 0
+		fi
+	done < $fifo
+	# No files with content differences.
+	rm $fifo
+	return 1
+}
+
 
 if [ -z "${SYSDIR}" ]; then
     SYSDIR=$(dirname $0)/..
@@ -182,7 +216,7 @@ done
 if findvcs .git; then
 	for dir in /usr/bin /usr/local/bin; do
 		if [ -x "${dir}/git" ] ; then
-			git_cmd="${dir}/git --git-dir=${VCSDIR}"
+			git_cmd="${dir}/git -c help.autocorrect=0 --git-dir=${VCSDIR}"
 			break
 		fi
 	done
@@ -239,8 +273,7 @@ if [ -n "$git_cmd" ] ; then
 	if [ -n "$git_b" ] ; then
 		git="${git}(${git_b})"
 	fi
-	if $git_cmd --work-tree=${VCSDIR}/.. diff-index \
-	    --name-only HEAD | read dummy; then
+	if git_tree_modified; then
 		git="${git}-dirty"
 		modified=true
 	fi
@@ -292,14 +325,14 @@ done
 shift $((OPTIND - 1))
 
 if [ -z "${include_metadata}" ]; then
-	VERINFO="${VERSION} ${svn}${git}${hg}${p4version}"
+	VERINFO="${VERSION}${svn}${git}${hg}${p4version} ${i}"
 	VERSTR="${VERINFO}\\n"
 else
 	VERINFO="${VERSION} #${v}${svn}${git}${hg}${p4version}: ${t}"
 	VERSTR="${VERINFO}\\n    ${u}@${h}:${d}\\n"
 fi
 
-cat << EOF > vers.c
+vers_content_new=$(cat << EOF
 $COPYRIGHT
 #define SCCSSTR "@(#)${VERINFO}"
 #define VERSTR "${VERSTR}"
@@ -313,5 +346,10 @@ char osrelease[sizeof(RELSTR) > 32 ? sizeof(RELSTR) : 32] = RELSTR;
 int osreldate = ${RELDATE};
 char kern_ident[] = "${i}";
 EOF
+)
+vers_content_old=$(cat vers.c 2>/dev/null || true)
+if [ "$vers_content_new" != "$vers_content_old" ]; then
+	echo "$vers_content_new" > vers.c
+fi
 
 echo $((v + 1)) > version

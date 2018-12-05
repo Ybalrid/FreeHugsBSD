@@ -445,7 +445,7 @@ __rw_rlock_hard(struct rwlock *rw, struct thread *td, uintptr_t v
 	int64_t all_time = 0;
 #endif
 #if defined(KDTRACE_HOOKS) || defined(LOCK_PROFILING)
-	uintptr_t state;
+	uintptr_t state = 0;
 	int doing_lockprof = 0;
 #endif
 
@@ -822,7 +822,7 @@ __rw_runlock_hard(struct rwlock *rw, struct thread *td, uintptr_t v
 		ts = turnstile_lookup(&rw->lock_object);
 		MPASS(ts != NULL);
 		turnstile_broadcast(ts, queue);
-		turnstile_unpend(ts, TS_SHARED_LOCK);
+		turnstile_unpend(ts);
 		td->td_rw_rlocks--;
 		break;
 	}
@@ -913,7 +913,7 @@ __rw_wlock_hard(volatile uintptr_t *c, uintptr_t v LOCK_FILE_LINE_ARG_DEF)
 	int64_t all_time = 0;
 #endif
 #if defined(KDTRACE_HOOKS) || defined(LOCK_PROFILING)
-	uintptr_t state;
+	uintptr_t state = 0;
 	int doing_lockprof = 0;
 #endif
 	int extra_work = 0;
@@ -1259,7 +1259,7 @@ __rw_wunlock_hard(volatile uintptr_t *c, uintptr_t v LOCK_FILE_LINE_ARG_DEF)
 	ts = turnstile_lookup(&rw->lock_object);
 	MPASS(ts != NULL);
 	turnstile_broadcast(ts, queue);
-	turnstile_unpend(ts, TS_EXCLUSIVE_LOCK);
+	turnstile_unpend(ts);
 	turnstile_chain_unlock(&rw->lock_object);
 }
 
@@ -1405,7 +1405,7 @@ __rw_downgrade_int(struct rwlock *rw LOCK_FILE_LINE_ARG_DEF)
 	 */
 	if (rwait && !wwait) {
 		turnstile_broadcast(ts, TS_SHARED_QUEUE);
-		turnstile_unpend(ts, TS_EXCLUSIVE_LOCK);
+		turnstile_unpend(ts);
 	} else
 		turnstile_disown(ts);
 	turnstile_chain_unlock(&rw->lock_object);
@@ -1439,7 +1439,7 @@ __rw_assert(const volatile uintptr_t *c, int what, const char *file, int line)
 {
 	const struct rwlock *rw;
 
-	if (panicstr != NULL)
+	if (SCHEDULER_STOPPED())
 		return;
 
 	rw = rwlock2rw(c);

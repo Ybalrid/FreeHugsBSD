@@ -46,6 +46,7 @@ static const char rcsid[] =
 
 #include <protocols/dumprestore.h>
 
+#include <assert.h>
 #include <ctype.h>
 #include <errno.h>
 #include <inttypes.h>
@@ -194,7 +195,7 @@ mapfiles(ino_t maxino, long *tapesize)
 		}
 		for (i = 0; i < inosused; i++, ino++) {
 			if (ino < UFS_ROOTINO ||
-			    (dp = getinode(ino, &mode)) == NULL ||
+			    (dp = getino(ino, &mode)) == NULL ||
 			    (mode & IFMT) == 0)
 				continue;
 			if (ino >= maxino) {
@@ -276,7 +277,7 @@ mapdirs(ino_t maxino, long *tapesize)
 		nodump = !nonodump && (TSTINO(ino, usedinomap) == 0);
 		if ((isdir & 1) == 0 || (TSTINO(ino, dumpinomap) && !nodump))
 			continue;
-		dp = getinode(ino, &i);
+		dp = getino(ino, &i);
 		/*
 		 * inode buf may change in searchdir().
 		 */
@@ -420,7 +421,7 @@ searchdir(
 				continue;
 		}
 		if (nodump) {
-			ip = getinode(dp->d_ino, &mode);
+			ip = getino(dp->d_ino, &mode);
 			if (TSTINO(dp->d_ino, dumpinomap)) {
 				CLRINO(dp->d_ino, dumpinomap);
 				*tapesize -= blockest(ip);
@@ -637,6 +638,7 @@ ufs1_blksout(ufs1_daddr_t *blkp, int frags, ino_t ino)
 			count = blks;
 		else
 			count = i + TP_NINDIR;
+		assert(count <= TP_NINDIR + i);
 		for (j = i; j < count; j++)
 			if (blkp[j / tbperdb] != 0)
 				spcl.c_addr[j - i] = 1;
@@ -689,6 +691,7 @@ ufs2_blksout(union dinode *dp, ufs2_daddr_t *blkp, int frags, ino_t ino,
 			count = blks;
 		else
 			count = i + TP_NINDIR;
+		assert(count <= TP_NINDIR + i);
 		for (j = i; j < count; j++)
 			if (blkp[j / tbperdb] != 0)
 				spcl.c_addr[j - i] = 1;
@@ -753,6 +756,7 @@ appendextdata(union dinode *dp)
 	 * data by the writeextdata() routine.
 	 */
 	tbperdb = sblock->fs_bsize >> tp_bshift;
+	assert(spcl.c_count + blks < TP_NINDIR);
 	for (i = 0; i < blks; i++)
 		if (&dp->dp2.di_extb[i / tbperdb] != 0)
 				spcl.c_addr[spcl.c_count + i] = 1;
@@ -871,7 +875,7 @@ writeheader(ino_t ino)
 }
 
 union dinode *
-getinode(ino_t inum, int *modep)
+getino(ino_t inum, int *modep)
 {
 	static ino_t minino, maxino;
 	static caddr_t inoblock;

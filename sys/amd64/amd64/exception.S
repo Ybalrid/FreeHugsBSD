@@ -43,8 +43,8 @@
 
 #include "assym.inc"
 
-#include <machine/asmacros.h>
 #include <machine/psl.h>
+#include <machine/asmacros.h>
 #include <machine/trap.h>
 #include <machine/specialreg.h>
 
@@ -196,7 +196,9 @@ alltraps_pushregs_no_rax:
 	movq	%r14,TF_R14(%rsp)
 	movq	%r15,TF_R15(%rsp)
 	movl	$TF_HASSEGS,TF_FLAGS(%rsp)
-	cld
+	pushfq
+	andq	$~(PSL_D | PSL_AC),(%rsp)
+	popfq
 	FAKE_MCOUNT(TF_RIP(%rsp))
 #ifdef KDTRACE_HOOKS
 	/*
@@ -277,7 +279,9 @@ IDTVEC(dblfault)
 	movq	%r15,TF_R15(%rsp)
 	SAVE_SEGS
 	movl	$TF_HASSEGS,TF_FLAGS(%rsp)
-	cld
+	pushfq
+	andq	$~(PSL_D | PSL_AC),(%rsp)
+	popfq
 	testb	$SEL_RPL_MASK,TF_CS(%rsp) /* Did we come from kernel? */
 	jz	1f			/* already running with kernel GS.base */
 	swapgs
@@ -463,8 +467,16 @@ fast_syscall_common:
 	movq	PCPU(SCRATCH_RSP),%r11	/* %r11 already saved */
 	movq	%r11,TF_RSP(%rsp)	/* user stack pointer */
 	movq	PCPU(SCRATCH_RAX),%rax
+	/*
+	 * Save a few arg registers early to free them for use in
+	 * handle_ibrs_entry().  %r10 is especially tricky.  It is not an
+	 * arg register, but it holds the arg register %rcx.  Profiling
+	 * preserves %rcx, but may clobber %r10.  Profiling may also
+	 * clobber %r11, but %r11 (original %eflags) has been saved.
+	 */
 	movq	%rax,TF_RAX(%rsp)	/* syscall number */
 	movq	%rdx,TF_RDX(%rsp)	/* arg 3 */
+	movq	%r10,TF_RCX(%rsp)	/* arg 4 */
 	SAVE_SEGS
 	call	handle_ibrs_entry
 	movq	PCPU(CURPCB),%r11
@@ -475,7 +487,6 @@ fast_syscall_common:
 	movq	$2,TF_ERR(%rsp)
 	movq	%rdi,TF_RDI(%rsp)	/* arg 1 */
 	movq	%rsi,TF_RSI(%rsp)	/* arg 2 */
-	movq	%r10,TF_RCX(%rsp)	/* arg 4 */
 	movq	%r8,TF_R8(%rsp)		/* arg 5 */
 	movq	%r9,TF_R9(%rsp)		/* arg 6 */
 	movq	%rbx,TF_RBX(%rsp)	/* C preserved */
@@ -564,7 +575,9 @@ IDTVEC(dbg)
 	movq	%r15,TF_R15(%rsp)
 	SAVE_SEGS
 	movl	$TF_HASSEGS,TF_FLAGS(%rsp)
-	cld
+	pushfq
+	andq	$~(PSL_D | PSL_AC),(%rsp)
+	popfq
 	testb	$SEL_RPL_MASK,TF_CS(%rsp)
 	jnz	dbg_fromuserspace
 	/*
@@ -697,7 +710,9 @@ IDTVEC(nmi)
 	movq	%r15,TF_R15(%rsp)
 	SAVE_SEGS
 	movl	$TF_HASSEGS,TF_FLAGS(%rsp)
-	cld
+	pushfq
+	andq	$~(PSL_D | PSL_AC),(%rsp)
+	popfq
 	xorl	%ebx,%ebx
 	testb	$SEL_RPL_MASK,TF_CS(%rsp)
 	jnz	nmi_fromuserspace
@@ -786,7 +801,9 @@ nmi_calltrap:
 	subq	%rcx,%rdx
 	movq	%rdx,%rdi	/* destination stack pointer */
 	shrq	$3,%rcx		/* trap frame size in long words */
-	cld
+	pushfq
+	andq	$~(PSL_D | PSL_AC),(%rsp)
+	popfq
 	rep
 	movsq			/* copy trapframe */
 	movq	%rdx,%rsp	/* we are on the regular kstack */
@@ -847,7 +864,10 @@ nocallchain:
 	movl	%edx,%eax
 	shrq	$32,%rdx
 	wrmsr
-	movq	%r13,%cr3
+	cmpb	$0, nmi_flush_l1d_sw(%rip)
+	je	2f
+	call	flush_l1d_sw		/* bhyve L1TF assist */
+2:	movq	%r13,%cr3
 	RESTORE_REGS
 	addq	$TF_RIP,%rsp
 	jmp	doreti_iret
@@ -895,7 +915,9 @@ IDTVEC(mchk)
 	movq	%r15,TF_R15(%rsp)
 	SAVE_SEGS
 	movl	$TF_HASSEGS,TF_FLAGS(%rsp)
-	cld
+	pushfq
+	andq	$~(PSL_D | PSL_AC),(%rsp)
+	popfq
 	xorl	%ebx,%ebx
 	testb	$SEL_RPL_MASK,TF_CS(%rsp)
 	jnz	mchk_fromuserspace

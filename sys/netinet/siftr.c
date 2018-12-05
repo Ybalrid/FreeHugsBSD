@@ -268,7 +268,7 @@ struct siftr_stats
 	uint32_t nskip_out_dejavu;
 };
 
-static DPCPU_DEFINE(struct siftr_stats, ss);
+DPCPU_DEFINE_STATIC(struct siftr_stats, ss);
 
 static volatile unsigned int siftr_exit_pkt_manager_thread = 0;
 static unsigned int siftr_enabled = 0;
@@ -710,7 +710,7 @@ siftr_findinpcb(int ipver, struct ip *ip, struct mbuf *m, uint16_t sport,
 	struct inpcb *inp;
 
 	/* We need the tcbinfo lock. */
-	INP_INFO_UNLOCK_ASSERT(&V_tcbinfo);
+	INP_INFO_WUNLOCK_ASSERT(&V_tcbinfo);
 
 	if (dir == PFIL_IN)
 		inp = (ipver == INP_IPV4 ?

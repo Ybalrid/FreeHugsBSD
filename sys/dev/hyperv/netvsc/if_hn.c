@@ -861,7 +861,8 @@ hn_set_hlen(struct mbuf *m_head)
 
 		PULLUP_HDR(m_head, ehlen + sizeof(*ip6));
 		ip6 = mtodo(m_head, ehlen);
-		if (ip6->ip6_nxt != IPPROTO_TCP) {
+		if (ip6->ip6_nxt != IPPROTO_TCP &&
+		    ip6->ip6_nxt != IPPROTO_UDP) {
 			m_freem(m_head);
 			return (NULL);
 		}
@@ -1159,6 +1160,13 @@ hn_ismyvf(const struct hn_softc *sc, const struct ifnet *ifp)
 	/* Ignore lagg/vlan interfaces */
 	if (strcmp(ifp->if_dname, "lagg") == 0 ||
 	    strcmp(ifp->if_dname, "vlan") == 0)
+		return (false);
+
+	/*
+	 * During detach events ifp->if_addr might be NULL.
+	 * Make sure the bcmp() below doesn't panic on that:
+	 */
+	if (ifp->if_addr == NULL || hn_ifp->if_addr == NULL)
 		return (false);
 
 	if (bcmp(IF_LLADDR(ifp), IF_LLADDR(hn_ifp), ETHER_ADDR_LEN) != 0)
@@ -5939,8 +5947,7 @@ hn_transmit(struct ifnet *ifp, struct mbuf *m)
 			int obytes, omcast;
 
 			obytes = m->m_pkthdr.len;
-			if (m->m_flags & M_MCAST)
-				omcast = 1;
+			omcast = (m->m_flags & M_MCAST) != 0;
 
 			if (sc->hn_xvf_flags & HN_XVFFLAG_ACCBPF) {
 				if (bpf_peers_present(ifp->if_bpf)) {

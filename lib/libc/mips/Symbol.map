@@ -37,9 +37,7 @@ FBSD_1.3 {
 
 FBSDprivate_1.0 {
 	/* PSEUDO syscalls */
-	__sys_getlogin;
 	_getlogin;
-	__sys_exit;
 
 	_set_tp;
 	___longjmp;
@@ -48,9 +46,7 @@ FBSDprivate_1.0 {
 	signalcontext;
 	_signalcontext;
 	__siglongjmp;
-	__sys_vfork;
 	_vfork;
-	_end;
 	_brk;
 	_sbrk;
 };

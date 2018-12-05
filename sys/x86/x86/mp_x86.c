@@ -31,7 +31,6 @@ __FBSDID("$FreeBSD$");
 #include "opt_apic.h"
 #endif
 #include "opt_cpu.h"
-#include "opt_isa.h"
 #include "opt_kstack_pages.h"
 #include "opt_pmap.h"
 #include "opt_sched.h"
@@ -63,9 +62,11 @@ __FBSDID("$FreeBSD$");
 #include <vm/pmap.h>
 #include <vm/vm_kern.h>
 #include <vm/vm_extern.h>
+#include <vm/vm_map.h>
 
 #include <x86/apicreg.h>
 #include <machine/clock.h>
+#include <machine/cpu.h>
 #include <machine/cputypes.h>
 #include <x86/mca.h>
 #include <machine/md_var.h>
@@ -73,7 +74,7 @@ __FBSDID("$FreeBSD$");
 #include <machine/psl.h>
 #include <machine/smp.h>
 #include <machine/specialreg.h>
-#include <machine/cpu.h>
+#include <x86/ucode.h>
 
 static MALLOC_DEFINE(M_CPUS, "cpus", "CPU items");
 
@@ -967,6 +968,8 @@ init_secondary_tail(void)
 {
 	u_int cpuid;
 
+	pmap_activate_boot(vmspace_pmap(proc0.p_vmspace));
+
 	/*
 	 * On real hardware, switch to x2apic mode if possible.  Do it
 	 * after aps_ready was signalled, to avoid manipulating the
@@ -1339,7 +1342,6 @@ ipi_nmi_handler(void)
 	return (0);
 }
 
-#ifdef DEV_ISA
 int nmi_kdb_lock;
 
 void
@@ -1363,7 +1365,6 @@ nmi_call_kdb_smp(u_int type, struct trapframe *frame)
 	if (call_post)
 		cpustop_handler_post(cpu);
 }
-#endif
 
 /*
  * Handle an IPI_STOP by saving our current context and spinning until we
@@ -1474,6 +1475,9 @@ cpususpend_handler(void)
 	/* Wait for resume directive */
 	while (!CPU_ISSET(cpu, &toresume_cpus))
 		ia32_pause();
+
+	/* Re-apply microcode updates. */
+	ucode_reload();
 
 #ifdef __i386__
 	/* Finish removing the identity mapping of low memory for this AP. */

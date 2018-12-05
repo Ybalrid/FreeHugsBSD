@@ -109,7 +109,7 @@ static	int ifconfig(int argc, char *const *argv, int iscreate,
 static	void status(const struct afswtch *afp, const struct sockaddr_dl *sdl,
 		struct ifaddrs *ifa);
 static	void tunnel_status(int s);
-static	void usage(void) _Noreturn;
+static _Noreturn void usage(void);
 
 static struct afswtch *af_getbyname(const char *name);
 static struct afswtch *af_getbyfamily(int af);
@@ -504,6 +504,18 @@ main(int argc, char *argv[])
 			}
 #endif
 			errx(1, "interface %s does not exist", ifname);
+		} else {
+			/*
+			 * Do not allow use `create` command as hostname if
+			 * address family is not specified.
+			 */
+			if (argc > 0 && (strcmp(argv[0], "create") == 0 ||
+			    strcmp(argv[0], "plumb") == 0)) {
+				if (argc == 1)
+					errx(1, "interface %s already exists",
+					    ifname);
+				argc--, argv++;
+			}
 		}
 	}
 

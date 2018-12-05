@@ -165,10 +165,9 @@ ENTRY(cpu_switch)
 	mov	x0, x19
 
 	/*
-	 * Release the old thread. This doesn't need to be a store-release
-	 * as the above dsb instruction will provide release semantics.
+	 * Release the old thread.
 	 */
-	str	x2, [x0, #TD_LOCK]
+	stlr	x2, [x0, #TD_LOCK]
 #if defined(SCHED_ULE) && defined(SMP)
 	/* Spin if TD_LOCK points to a blocked_lock */
 	ldr	x2, =_C_LABEL(blocked_lock)
@@ -237,12 +236,12 @@ ENTRY(fork_trampoline)
 	msr	daifset, #2
 
 	/* Restore sp and lr */
-	ldp	x0, x1, [sp]
+	ldp	x0, x1, [sp, #TF_SP]
 	msr	sp_el0, x0
 	mov	lr, x1
 
 	/* Restore elr and spsr */
-	ldp	x0, x1, [sp, #16]
+	ldp	x0, x1, [sp, #TF_ELR]
 	msr	elr_el1, x0
 	msr	spsr_el1, x1
 

@@ -33,6 +33,7 @@ __FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/eventhandler.h>
+#include <sys/fnv_hash.h>
 #include <sys/systm.h>
 #include <sys/kernel.h>
 #include <sys/module.h>
@@ -50,49 +51,278 @@ __FBSDID("$FreeBSD$");
 #include "common/t4_regs_values.h"
 #include "common/t4_tcb.h"
 #include "t4_l2t.h"
+#include "t4_smt.h"
 
 struct filter_entry {
+	LIST_ENTRY(filter_entry) link_4t;
+	LIST_ENTRY(filter_entry) link_tid;
+
 	uint32_t valid:1;	/* filter allocated and valid */
 	uint32_t locked:1;	/* filter is administratively locked or busy */
 	uint32_t pending:1;	/* filter action is pending firmware reply */
-	uint32_t smtidx:8;	/* Source MAC Table index for smac */
 	int tid;		/* tid of the filter TCB */
 	struct l2t_entry *l2te;	/* L2 table entry for DMAC rewrite */
+	struct smt_entry *smt;	/* SMT entry for SMAC rewrite */
 
 	struct t4_filter_specification fs;
 };
 
 static void free_filter_resources(struct filter_entry *);
+static int get_tcamfilter(struct adapter *, struct t4_filter *);
 static int get_hashfilter(struct adapter *, struct t4_filter *);
 static int set_hashfilter(struct adapter *, struct t4_filter *, uint64_t,
-    struct l2t_entry *);
+    struct l2t_entry *, struct smt_entry *);
 static int del_hashfilter(struct adapter *, struct t4_filter *);
 static int configure_hashfilter_tcb(struct adapter *, struct filter_entry *);
 
-static void
-insert_hftid(struct adapter *sc, int tid, void *ctx, int ntids)
+static inline bool
+separate_hpfilter_region(struct adapter *sc)
 {
-	struct tid_info *t = &sc->tids;
 
-	t->hftid_tab[tid] = ctx;
-	atomic_add_int(&t->tids_in_use, ntids);
+	return (chip_id(sc) >= CHELSIO_T6);
 }
 
-static void *
+static inline uint32_t
+hf_hashfn_4t(struct t4_filter_specification *fs)
+{
+	struct t4_filter_tuple *ft = &fs->val;
+	uint32_t hash;
+
+	if (fs->type) {
+		/* IPv6 */
+		hash = fnv_32_buf(&ft->sip[0], 16, FNV1_32_INIT);
+		hash = fnv_32_buf(&ft->dip[0], 16, hash);
+	} else {
+		hash = fnv_32_buf(&ft->sip[0], 4, FNV1_32_INIT);
+		hash = fnv_32_buf(&ft->dip[0], 4, hash);
+	}
+	hash = fnv_32_buf(&ft->sport, sizeof(ft->sport), hash);
+	hash = fnv_32_buf(&ft->dport, sizeof(ft->dport), hash);
+
+	return (hash);
+}
+
+static inline uint32_t
+hf_hashfn_tid(int tid)
+{
+
+	return (fnv_32_buf(&tid, sizeof(tid), FNV1_32_INIT));
+}
+
+static int
+alloc_hftid_hash(struct tid_info *t, int flags)
+{
+	int n;
+
+	MPASS(t->ntids > 0);
+	MPASS(t->hftid_hash_4t == NULL);
+	MPASS(t->hftid_hash_tid == NULL);
+
+	n = max(t->ntids / 1024, 16);
+	t->hftid_hash_4t = hashinit_flags(n, M_CXGBE, &t->hftid_4t_mask, flags);
+	if (t->hftid_hash_4t == NULL)
+		return (ENOMEM);
+	t->hftid_hash_tid = hashinit_flags(n, M_CXGBE, &t->hftid_tid_mask,
+	    flags);
+	if (t->hftid_hash_tid == NULL) {
+		hashdestroy(t->hftid_hash_4t, M_CXGBE, t->hftid_4t_mask);
+		t->hftid_hash_4t = NULL;
+		return (ENOMEM);
+	}
+
+	mtx_init(&t->hftid_lock, "T4 hashfilters", 0, MTX_DEF);
+	cv_init(&t->hftid_cv, "t4hfcv");
+
+	return (0);
+}
+
+void
+free_hftid_hash(struct tid_info *t)
+{
+	struct filter_entry *f, *ftmp;
+	LIST_HEAD(, filter_entry) *head;
+	int i;
+#ifdef INVARIANTS
+	int n = 0;
+#endif
+
+	if (t->tids_in_use > 0) {
+		/* Remove everything from the tid hash. */
+		head = t->hftid_hash_tid;
+		for (i = 0; i <= t->hftid_tid_mask; i++) {
+			LIST_FOREACH_SAFE(f, &head[i], link_tid, ftmp) {
+				LIST_REMOVE(f, link_tid);
+			}
+		}
+
+		/* Remove and then free each filter in the 4t hash. */
+		head = t->hftid_hash_4t;
+		for (i = 0; i <= t->hftid_4t_mask; i++) {
+			LIST_FOREACH_SAFE(f, &head[i], link_4t, ftmp) {
+#ifdef INVARIANTS
+				n += f->fs.type ? 2 : 1;
+#endif
+				LIST_REMOVE(f, link_4t);
+				free(f, M_CXGBE);
+			}
+		}
+		MPASS(t->tids_in_use == n);
+		t->tids_in_use = 0;
+	}
+
+	if (t->hftid_hash_4t) {
+		hashdestroy(t->hftid_hash_4t, M_CXGBE, t->hftid_4t_mask);
+		t->hftid_hash_4t = NULL;
+	}
+	if (t->hftid_hash_tid) {
+		hashdestroy(t->hftid_hash_tid, M_CXGBE, t->hftid_tid_mask);
+		t->hftid_hash_tid = NULL;
+	}
+	if (mtx_initialized(&t->hftid_lock)) {
+		mtx_destroy(&t->hftid_lock);
+		cv_destroy(&t->hftid_cv);
+	}
+}
+
+static void
+insert_hf(struct adapter *sc, struct filter_entry *f, uint32_t hash)
+{
+	struct tid_info *t = &sc->tids;
+	LIST_HEAD(, filter_entry) *head = t->hftid_hash_4t;
+
+	MPASS(head != NULL);
+	if (hash == 0)
+		hash = hf_hashfn_4t(&f->fs);
+	LIST_INSERT_HEAD(&head[hash & t->hftid_4t_mask], f, link_4t);
+	atomic_add_int(&t->tids_in_use, f->fs.type ? 2 : 1);
+}
+
+static void
+insert_hftid(struct adapter *sc, struct filter_entry *f)
+{
+	struct tid_info *t = &sc->tids;
+	LIST_HEAD(, filter_entry) *head = t->hftid_hash_tid;
+	uint32_t hash;
+
+	MPASS(f->tid >= t->tid_base);
+	MPASS(f->tid - t->tid_base < t->ntids);
+	mtx_assert(&t->hftid_lock, MA_OWNED);
+
+	hash = hf_hashfn_tid(f->tid);
+	LIST_INSERT_HEAD(&head[hash & t->hftid_tid_mask], f, link_tid);
+}
+
+static bool
+filter_eq(struct t4_filter_specification *fs1,
+    struct t4_filter_specification *fs2)
+{
+	int n;
+
+	MPASS(fs1->hash && fs2->hash);
+
+	if (fs1->type != fs2->type)
+		return (false);
+
+	n = fs1->type ? 16 : 4;
+	if (bcmp(&fs1->val.sip[0], &fs2->val.sip[0], n) ||
+	    bcmp(&fs1->val.dip[0], &fs2->val.dip[0], n) ||
+	    fs1->val.sport != fs2->val.sport ||
+	    fs1->val.dport != fs2->val.dport)
+		return (false);
+
+	/*
+	 * We know the masks are the same because all hashfilter masks have to
+	 * conform to the global tp->hash_filter_mask and the driver has
+	 * verified that already.
+	 */
+
+	if ((fs1->mask.pfvf_vld || fs1->mask.ovlan_vld) &&
+	    fs1->val.vnic != fs2->val.vnic)
+		return (false);
+	if (fs1->mask.vlan_vld && fs1->val.vlan != fs2->val.vlan)
+		return (false);
+	if (fs1->mask.macidx && fs1->val.macidx != fs2->val.macidx)
+		return (false);
+	if (fs1->mask.frag && fs1->val.frag != fs2->val.frag)
+		return (false);
+	if (fs1->mask.matchtype && fs1->val.matchtype != fs2->val.matchtype)
+		return (false);
+	if (fs1->mask.iport && fs1->val.iport != fs2->val.iport)
+		return (false);
+	if (fs1->mask.fcoe && fs1->val.fcoe != fs2->val.fcoe)
+		return (false);
+	if (fs1->mask.proto && fs1->val.proto != fs2->val.proto)
+		return (false);
+	if (fs1->mask.tos && fs1->val.tos != fs2->val.tos)
+		return (false);
+	if (fs1->mask.ethtype && fs1->val.ethtype != fs2->val.ethtype)
+		return (false);
+
+	return (true);
+}
+
+static struct filter_entry *
+lookup_hf(struct adapter *sc, struct t4_filter_specification *fs, uint32_t hash)
+{
+	struct tid_info *t = &sc->tids;
+	LIST_HEAD(, filter_entry) *head = t->hftid_hash_4t;
+	struct filter_entry *f;
+
+	mtx_assert(&t->hftid_lock, MA_OWNED);
+	MPASS(head != NULL);
+
+	if (hash == 0)
+		hash = hf_hashfn_4t(fs);
+
+	LIST_FOREACH(f, &head[hash & t->hftid_4t_mask], link_4t) {
+		if (filter_eq(&f->fs, fs))
+			return (f);
+	}
+
+	return (NULL);
+}
+
+static struct filter_entry *
 lookup_hftid(struct adapter *sc, int tid)
 {
 	struct tid_info *t = &sc->tids;
+	LIST_HEAD(, filter_entry) *head = t->hftid_hash_tid;
+	struct filter_entry *f;
+	uint32_t hash;
 
-	return (t->hftid_tab[tid]);
+	mtx_assert(&t->hftid_lock, MA_OWNED);
+	MPASS(head != NULL);
+
+	hash = hf_hashfn_tid(tid);
+	LIST_FOREACH(f, &head[hash & t->hftid_tid_mask], link_tid) {
+		if (f->tid == tid)
+			return (f);
+	}
+
+	return (NULL);
 }
 
 static void
-remove_hftid(struct adapter *sc, int tid, int ntids)
+remove_hf(struct adapter *sc, struct filter_entry *f)
 {
 	struct tid_info *t = &sc->tids;
 
-	t->hftid_tab[tid] = NULL;
-	atomic_subtract_int(&t->tids_in_use, ntids);
+	mtx_assert(&t->hftid_lock, MA_OWNED);
+
+	LIST_REMOVE(f, link_4t);
+	atomic_subtract_int(&t->tids_in_use, f->fs.type ? 2 : 1);
+}
+
+static void
+remove_hftid(struct adapter *sc, struct filter_entry *f)
+{
+#ifdef INVARIANTS
+	struct tid_info *t = &sc->tids;
+
+	mtx_assert(&t->hftid_lock, MA_OWNED);
+#endif
+
+	LIST_REMOVE(f, link_tid);
 }
 
 static uint32_t
@@ -261,7 +491,7 @@ set_filter_mode(struct adapter *sc, uint32_t mode)
 	if (rc)
 		return (rc);
 
-	if (sc->tids.ftids_in_use > 0) {
+	if (sc->tids.ftids_in_use > 0 || sc->tids.hpftids_in_use > 0) {
 		rc = EBUSY;
 		goto done;
 	}
@@ -302,58 +532,38 @@ get_filter_hits(struct adapter *sc, uint32_t tid)
 int
 get_filter(struct adapter *sc, struct t4_filter *t)
 {
-	int i, nfilters = sc->tids.nftids;
-	struct filter_entry *f;
-
 	if (t->fs.hash)
 		return (get_hashfilter(sc, t));
-
-	if (sc->tids.ftids_in_use == 0 || sc->tids.ftid_tab == NULL ||
-	    t->idx >= nfilters) {
-		t->idx = 0xffffffff;
-		return (0);
-	}
-
-	mtx_lock(&sc->tids.ftid_lock);
-	f = &sc->tids.ftid_tab[t->idx];
-	for (i = t->idx; i < nfilters; i++, f++) {
-		if (f->valid) {
-			MPASS(f->tid == sc->tids.ftid_base + i);
-			t->idx = i;
-			t->l2tidx = f->l2te ? f->l2te->idx : 0;
-			t->smtidx = f->smtidx;
-			if (f->fs.hitcnts)
-				t->hits = get_filter_hits(sc, f->tid);
-			else
-				t->hits = UINT64_MAX;
-			t->fs = f->fs;
-
-			goto done;
-		}
-	}
-	t->idx = 0xffffffff;
-done:
-	mtx_unlock(&sc->tids.ftid_lock);
-	return (0);
+	else
+		return (get_tcamfilter(sc, t));
 }
 
 static int
-set_tcamfilter(struct adapter *sc, struct t4_filter *t, struct l2t_entry *l2te)
+set_tcamfilter(struct adapter *sc, struct t4_filter *t, struct l2t_entry *l2te,
+    struct smt_entry *smt)
 {
 	struct filter_entry *f;
 	struct fw_filter2_wr *fwr;
 	u_int vnic_vld, vnic_vld_mask;
 	struct wrq_cookie cookie;
 	int i, rc, busy, locked;
+	u_int tid;
 	const int ntids = t->fs.type ? 4 : 1;
 
 	MPASS(!t->fs.hash);
-	MPASS(t->idx < sc->tids.nftids);
 	/* Already validated against fconf, iconf */
 	MPASS((t->fs.val.pfvf_vld & t->fs.val.ovlan_vld) == 0);
 	MPASS((t->fs.mask.pfvf_vld & t->fs.mask.ovlan_vld) == 0);
 
-	f = &sc->tids.ftid_tab[t->idx];
+	if (separate_hpfilter_region(sc) && t->fs.prio) {
+		MPASS(t->idx < sc->tids.nhpftids);
+		f = &sc->tids.hpftid_tab[t->idx];
+		tid = sc->tids.hpftid_base + t->idx;
+	} else {
+		MPASS(t->idx < sc->tids.nftids);
+		f = &sc->tids.ftid_tab[t->idx];
+		tid = sc->tids.ftid_base + t->idx;
+	}
 	rc = busy = locked = 0;
 	mtx_lock(&sc->tids.ftid_lock);
 	for (i = 0; i < ntids; i++) {
@@ -371,28 +581,29 @@ set_tcamfilter(struct adapter *sc, struct t4_filter *t, struct l2t_entry *l2te)
 			len16 = howmany(sizeof(struct fw_filter2_wr), 16);
 		else
 			len16 = howmany(sizeof(struct fw_filter_wr), 16);
-		fwr = start_wrq_wr(&sc->sge.mgmtq, len16, &cookie);
+		fwr = start_wrq_wr(&sc->sge.ctrlq[0], len16, &cookie);
 		if (__predict_false(fwr == NULL))
 			rc = ENOMEM;
 		else {
 			f->pending = 1;
-			sc->tids.ftids_in_use++;
+			if (separate_hpfilter_region(sc) && t->fs.prio)
+				sc->tids.hpftids_in_use++;
+			else
+				sc->tids.ftids_in_use++;
 		}
 	}
 	mtx_unlock(&sc->tids.ftid_lock);
-	if (rc != 0) {
-		if (l2te)
-			t4_l2t_release(l2te);
+	if (rc != 0)
 		return (rc);
-	}
 
 	/*
 	 * Can't fail now.  A set-filter WR will definitely be sent.
 	 */
 
-	f->tid = sc->tids.ftid_base + t->idx;
+	f->tid = tid;
 	f->fs = t->fs;
 	f->l2te = l2te;
+	f->smt = smt;
 
 	if (t->fs.val.pfvf_vld || t->fs.val.ovlan_vld)
 		vnic_vld = 1;
@@ -468,10 +679,8 @@ set_tcamfilter(struct adapter *sc, struct t4_filter *t, struct l2t_entry *l2te)
 	fwr->lpm = htobe16(f->fs.mask.dport);
 	fwr->fp = htobe16(f->fs.val.sport);
 	fwr->fpm = htobe16(f->fs.mask.sport);
-	if (f->fs.newsmac) {
-		/* XXX: need to use SMT idx instead */
-		bcopy(f->fs.smac, fwr->sma, sizeof (fwr->sma));
-	}
+	/* sma = 0 tells the fw to use SMAC_SEL for source MAC address */
+	bzero(fwr->sma, sizeof (fwr->sma));
 	if (sc->params.filter2_wr_support) {
 		fwr->filter_type_swapmac =
 		    V_FW_FILTER2_WR_SWAPMAC(f->fs.swapmac);
@@ -486,7 +695,7 @@ set_tcamfilter(struct adapter *sc, struct t4_filter *t, struct l2t_entry *l2te)
 		fwr->newfport = htobe16(f->fs.nat_sport);
 		fwr->natseqcheck = htobe32(f->fs.nat_seq_chk);
 	}
-	commit_wrq_wr(&sc->sge.mgmtq, fwr, &cookie);
+	commit_wrq_wr(&sc->sge.ctrlq[0], fwr, &cookie);
 
 	/* Wait for response. */
 	mtx_lock(&sc->tids.ftid_lock);
@@ -580,11 +789,31 @@ hashfilter_ntuple(struct adapter *sc, const struct t4_filter_specification *fs,
 	return (0);
 }
 
+static bool
+is_4tuple_specified(struct t4_filter_specification *fs)
+{
+	int i;
+	const int n = fs->type ? 16 : 4;
+
+	if (fs->mask.sport != 0xffff || fs->mask.dport != 0xffff)
+		return (false);
+
+	for (i = 0; i < n; i++) {
+		if (fs->mask.sip[i] != 0xff)
+			return (false);
+		if (fs->mask.dip[i] != 0xff)
+			return (false);
+	}
+
+	return (true);
+}
+
 int
 set_filter(struct adapter *sc, struct t4_filter *t)
 {
 	struct tid_info *ti = &sc->tids;
-	struct l2t_entry *l2te;
+	struct l2t_entry *l2te = NULL;
+	struct smt_entry *smt = NULL;
 	uint64_t ftuple;
 	int rc;
 
@@ -601,14 +830,23 @@ set_filter(struct adapter *sc, struct t4_filter *t)
 		/* T5 can't count hashfilter hits. */
 		if (is_t5(sc) && t->fs.hitcnts)
 			return (EINVAL);
+		if (!is_4tuple_specified(&t->fs))
+			return (EINVAL);
 		rc = hashfilter_ntuple(sc, &t->fs, &ftuple);
 		if (rc != 0)
 			return (rc);
 	} else {
-		if (ti->nftids == 0)
-			return (ENOTSUP);
-		if (t->idx >= ti->nftids)
-			return (EINVAL);
+		if (separate_hpfilter_region(sc) && t->fs.prio) {
+			if (ti->nhpftids == 0)
+				return (ENOTSUP);
+			if (t->idx >= ti->nhpftids)
+				return (EINVAL);
+		} else {
+			if (ti->nftids == 0)
+				return (ENOTSUP);
+			if (t->idx >= ti->nftids)
+				return (EINVAL);
+		}
 		/* IPv6 filter idx must be 4 aligned */
 		if (t->fs.type == 1 &&
 		    ((t->idx & 0x3) || t->idx + 4 >= ti->nftids))
@@ -626,8 +864,8 @@ set_filter(struct adapter *sc, struct t4_filter *t)
 	if (t->fs.val.iport >= sc->params.nports)
 		return (EINVAL);
 
-	/* Can't specify an iq if not steering to it */
-	if (!t->fs.dirsteer && t->fs.iq)
+	/* Can't specify an iqid/rss_info if not steering. */
+	if (!t->fs.dirsteer && !t->fs.dirsteerhash && !t->fs.maskhash && t->fs.iq)
 		return (EINVAL);
 
 	/* Validate against the global filter mode and ingress config */
@@ -648,32 +886,47 @@ set_filter(struct adapter *sc, struct t4_filter *t)
 		return (rc);
 	}
 	if (t->fs.hash) {
-		if (__predict_false(ti->hftid_tab == NULL)) {
-			ti->hftid_tab = malloc(sizeof(*ti->hftid_tab) * ti->ntids,
-			    M_CXGBE, M_NOWAIT | M_ZERO);
-			if (ti->hftid_tab == NULL) {
-				rc = ENOMEM;
+		if (__predict_false(ti->hftid_hash_4t == NULL)) {
+			rc = alloc_hftid_hash(&sc->tids, HASH_NOWAIT);
+			if (rc != 0)
 				goto done;
-			}
-			mtx_init(&ti->hftid_lock, "T4 hashfilters", 0, MTX_DEF);
-			cv_init(&ti->hftid_cv, "t4hfcv");
 		}
 		if (__predict_false(sc->tids.atid_tab == NULL)) {
 			rc = alloc_atid_tab(&sc->tids, M_NOWAIT);
 			if (rc != 0)
 				goto done;
 		}
+	} else if (separate_hpfilter_region(sc) && t->fs.prio &&
+	    __predict_false(ti->hpftid_tab == NULL)) {
+		MPASS(ti->nhpftids != 0);
+		KASSERT(ti->hpftids_in_use == 0,
+		    ("%s: no memory allocated but hpftids_in_use is %u",
+		    __func__, ti->hpftids_in_use));
+		ti->hpftid_tab = malloc(sizeof(struct filter_entry) *
+		    ti->nhpftids, M_CXGBE, M_NOWAIT | M_ZERO);
+		if (ti->hpftid_tab == NULL) {
+			rc = ENOMEM;
+			goto done;
+		}
+		if (!mtx_initialized(&sc->tids.ftid_lock)) {
+			mtx_init(&ti->ftid_lock, "T4 filters", 0, MTX_DEF);
+			cv_init(&ti->ftid_cv, "t4fcv");
+		}
 	} else if (__predict_false(ti->ftid_tab == NULL)) {
+		MPASS(ti->nftids != 0);
 		KASSERT(ti->ftids_in_use == 0,
-		    ("%s: no memory allocated but ftids_in_use > 0", __func__));
+		    ("%s: no memory allocated but ftids_in_use is %u",
+		    __func__, ti->ftids_in_use));
 		ti->ftid_tab = malloc(sizeof(struct filter_entry) * ti->nftids,
 		    M_CXGBE, M_NOWAIT | M_ZERO);
 		if (ti->ftid_tab == NULL) {
 			rc = ENOMEM;
 			goto done;
 		}
-		mtx_init(&ti->ftid_lock, "T4 filters", 0, MTX_DEF);
-		cv_init(&ti->ftid_cv, "t4fcv");
+		if (!mtx_initialized(&sc->tids.ftid_lock)) {
+			mtx_init(&ti->ftid_lock, "T4 filters", 0, MTX_DEF);
+			cv_init(&ti->ftid_cv, "t4fcv");
+		}
 	}
 done:
 	end_synchronized_op(sc, 0);
@@ -684,29 +937,41 @@ done:
 	 * Allocate L2T entry, SMT entry, etc.
 	 */
 
-	l2te = NULL;
 	if (t->fs.newdmac || t->fs.newvlan) {
 		/* This filter needs an L2T entry; allocate one. */
-		l2te = t4_l2t_alloc_switching(sc->l2t);
-		if (__predict_false(l2te == NULL))
-			return (EAGAIN);
-		if (t4_l2t_set_switching(sc, l2te, t->fs.vlan, t->fs.eport,
-		    t->fs.dmac)) {
-			t4_l2t_release(l2te);
-			return (ENOMEM);
+		l2te = t4_l2t_alloc_switching(sc, t->fs.vlan, t->fs.eport,
+		    t->fs.dmac);
+		if (__predict_false(l2te == NULL)) {
+			rc = EAGAIN;
+			goto error;
 		}
 	}
 
 	if (t->fs.newsmac) {
-		/* XXX: alloc SMT */
-		return (ENOTSUP);
+		/* This filter needs an SMT entry; allocate one. */
+		smt = t4_smt_alloc_switching(sc->smt, t->fs.smac);
+		if (__predict_false(smt == NULL)) {
+			rc = EAGAIN;
+			goto error;
+		}
+		rc = t4_smt_set_switching(sc, smt, 0x0, t->fs.smac);
+		if (rc)
+			goto error;
 	}
 
 	if (t->fs.hash)
-		return (set_hashfilter(sc, t, ftuple, l2te));
+		rc = set_hashfilter(sc, t, ftuple, l2te, smt);
 	else
-		return (set_tcamfilter(sc, t, l2te));
+		rc = set_tcamfilter(sc, t, l2te, smt);
 
+	if (rc != 0 && rc != EINPROGRESS) {
+error:
+		if (l2te)
+			t4_l2t_release(l2te);
+		if (smt)
+			t4_smt_release(smt);
+	}
+	return (rc);
 }
 
 static int
@@ -715,16 +980,32 @@ del_tcamfilter(struct adapter *sc, struct t4_filter *t)
 	struct filter_entry *f;
 	struct fw_filter_wr *fwr;
 	struct wrq_cookie cookie;
-	int rc;
-
-	MPASS(sc->tids.ftid_tab != NULL);
-	MPASS(sc->tids.nftids > 0);
-
-	if (t->idx >= sc->tids.nftids)
-		return (EINVAL);
+	int rc, nfilters;
+#ifdef INVARIANTS
+	u_int tid_base;
+#endif
 
 	mtx_lock(&sc->tids.ftid_lock);
-	f = &sc->tids.ftid_tab[t->idx];
+	if (separate_hpfilter_region(sc) && t->fs.prio) {
+		nfilters = sc->tids.nhpftids;
+		f = sc->tids.hpftid_tab;
+#ifdef INVARIANTS
+		tid_base = sc->tids.hpftid_base;
+#endif
+	} else {
+		nfilters = sc->tids.nftids;
+		f = sc->tids.ftid_tab;
+#ifdef INVARIANTS
+		tid_base = sc->tids.ftid_base;
+#endif
+	}
+	MPASS(f != NULL);	/* Caller checked this. */
+	if (t->idx >= nfilters) {
+		rc = EINVAL;
+		goto done;
+	}
+	f += t->idx;
+
 	if (f->locked) {
 		rc = EPERM;
 		goto done;
@@ -737,8 +1018,8 @@ del_tcamfilter(struct adapter *sc, struct t4_filter *t)
 		rc = EINVAL;
 		goto done;
 	}
-	MPASS(f->tid == sc->tids.ftid_base + t->idx);
-	fwr = start_wrq_wr(&sc->sge.mgmtq, howmany(sizeof(*fwr), 16), &cookie);
+	MPASS(f->tid == tid_base + t->idx);
+	fwr = start_wrq_wr(&sc->sge.ctrlq[0], howmany(sizeof(*fwr), 16), &cookie);
 	if (fwr == NULL) {
 		rc = ENOMEM;
 		goto done;
@@ -747,7 +1028,7 @@ del_tcamfilter(struct adapter *sc, struct t4_filter *t)
 	bzero(fwr, sizeof (*fwr));
 	t4_mk_filtdelwr(f->tid, fwr, sc->sge.fwq.abs_id);
 	f->pending = 1;
-	commit_wrq_wr(&sc->sge.mgmtq, fwr, &cookie);
+	commit_wrq_wr(&sc->sge.ctrlq[0], fwr, &cookie);
 	t->fs = f->fs;	/* extra info for the caller */
 
 	for (;;) {
@@ -778,8 +1059,11 @@ del_filter(struct adapter *sc, struct t4_filter *t)
 	 * for are initialized.
 	 */
 	if (t->fs.hash) {
-		if (sc->tids.hftid_tab != NULL)
+		if (sc->tids.hftid_hash_4t != NULL)
 			return (del_hashfilter(sc, t));
+	} else if (separate_hpfilter_region(sc) && t->fs.prio) {
+		if (sc->tids.hpftid_tab != NULL)
+			return (del_tcamfilter(sc, t));
 	} else {
 		if (sc->tids.ftid_tab != NULL)
 			return (del_tcamfilter(sc, t));
@@ -799,6 +1083,45 @@ free_filter_resources(struct filter_entry *f)
 		t4_l2t_release(f->l2te);
 		f->l2te = NULL;
 	}
+	if (f->smt) {
+		t4_smt_release(f->smt);
+		f->smt = NULL;
+	}
+}
+
+static int
+set_tcb_field(struct adapter *sc, u_int tid, uint16_t word, uint64_t mask,
+    uint64_t val, int no_reply)
+{
+	struct wrq_cookie cookie;
+	struct cpl_set_tcb_field *req;
+
+	req = start_wrq_wr(&sc->sge.ctrlq[0], howmany(sizeof(*req), 16), &cookie);
+	if (req == NULL)
+		return (ENOMEM);
+	bzero(req, sizeof(*req));
+	INIT_TP_WR_MIT_CPL(req, CPL_SET_TCB_FIELD, tid);
+	if (no_reply == 0) {
+		req->reply_ctrl = htobe16(V_QUEUENO(sc->sge.fwq.abs_id) |
+		    V_NO_REPLY(0));
+	} else
+		req->reply_ctrl = htobe16(V_NO_REPLY(1));
+	req->word_cookie = htobe16(V_WORD(word) | V_COOKIE(CPL_COOKIE_HASHFILTER));
+	req->mask = htobe64(mask);
+	req->val = htobe64(val);
+	commit_wrq_wr(&sc->sge.ctrlq[0], req, &cookie);
+
+	return (0);
+}
+
+/* Set one of the t_flags bits in the TCB. */
+static inline int
+set_tcb_tflag(struct adapter *sc, int tid, u_int bit_pos, u_int val,
+    u_int no_reply)
+{
+
+	return (set_tcb_field(sc, tid,  W_TCB_T_FLAGS, 1ULL << bit_pos,
+	    (uint64_t)val << bit_pos, no_reply));
 }
 
 int
@@ -807,26 +1130,40 @@ t4_filter_rpl(struct sge_iq *iq, const struct rss_header *rss, struct mbuf *m)
 	struct adapter *sc = iq->adapter;
 	const struct cpl_set_tcb_rpl *rpl = (const void *)(rss + 1);
 	u_int tid = GET_TID(rpl);
-	u_int rc, cleanup, idx;
+	u_int rc, idx;
 	struct filter_entry *f;
 
 	KASSERT(m == NULL, ("%s: payload with opcode %02x", __func__,
 	    rss->opcode));
-	MPASS(is_ftid(sc, tid));
 
-	cleanup = 0;
-	idx = tid - sc->tids.ftid_base;
-	f = &sc->tids.ftid_tab[idx];
+
+	if (is_hpftid(sc, tid)) {
+		idx = tid - sc->tids.hpftid_base;
+		f = &sc->tids.hpftid_tab[idx];
+	} else if (is_ftid(sc, tid)) {
+		idx = tid - sc->tids.ftid_base;
+		f = &sc->tids.ftid_tab[idx];
+	} else
+		panic("%s: FW reply for invalid TID %d.", __func__, tid);
+
+	MPASS(f->tid == tid);
 	rc = G_COOKIE(rpl->cookie);
 
 	mtx_lock(&sc->tids.ftid_lock);
 	KASSERT(f->pending, ("%s: reply %d for filter[%u] that isn't pending.",
-	    __func__, rc, idx));
+	    __func__, rc, tid));
 	switch(rc) {
 	case FW_FILTER_WR_FLT_ADDED:
 		/* set-filter succeeded */
 		f->valid = 1;
-		f->smtidx = (be64toh(rpl->oldval) >> 24) & 0xff;
+		if (f->fs.newsmac) {
+			MPASS(f->smt != NULL);
+			set_tcb_tflag(sc, f->tid, S_TF_CCTRL_CWR, 1, 1);
+			set_tcb_field(sc, f->tid, W_TCB_SMAC_SEL,
+			    V_TCB_SMAC_SEL(M_TCB_SMAC_SEL),
+			    V_TCB_SMAC_SEL(f->smt->idx), 1);
+			/* XXX: wait for reply to TCB update before !pending */
+		}
 		break;
 	case FW_FILTER_WR_FLT_DELETED:
 		/* del-filter succeeded */
@@ -837,7 +1174,10 @@ t4_filter_rpl(struct sge_iq *iq, const struct rss_header *rss, struct mbuf *m)
 		/* set-filter failed due to lack of SMT space. */
 		MPASS(f->valid == 0);
 		free_filter_resources(f);
-		sc->tids.ftids_in_use--;
+		if (separate_hpfilter_region(sc) && f->fs.prio)
+			sc->tids.hpftids_in_use--;
+		else
+			sc->tids.ftids_in_use--;
 		break;
 	case FW_FILTER_WR_SUCCESS:
 	case FW_FILTER_WR_EINVAL:
@@ -873,18 +1213,9 @@ t4_hashfilter_ao_rpl(struct sge_iq *iq, const struct rss_header *rss,
 	KASSERT(f->tid == -1, ("%s: hashfilter[%p] has tid %d already.",
 	    __func__, f, f->tid));
 	if (status == CPL_ERR_NONE) {
-		struct filter_entry *f2;
-
 		f->tid = GET_TID(cpl);
-		MPASS(f->tid < sc->tids.ntids);
-		if (__predict_false((f2 = lookup_hftid(sc, f->tid)) != NULL)) {
-			/* XXX: avoid hash collisions in the first place. */
-			MPASS(f2->tid == f->tid);
-			remove_hftid(sc, f2->tid, f2->fs.type ? 2 : 1);
-			free_filter_resources(f2);
-			free(f2, M_CXGBE);
-		}
-		insert_hftid(sc, f->tid, f, f->fs.type ? 2 : 1);
+		MPASS(lookup_hftid(sc, f->tid) == NULL);
+		insert_hftid(sc, f);
 		/*
 		 * Leave the filter pending until it is fully set up, which will
 		 * be indicated by the reply to the last TCB update.  No need to
@@ -899,8 +1230,9 @@ t4_hashfilter_ao_rpl(struct sge_iq *iq, const struct rss_header *rss,
 		f->tid = act_open_rpl_status_to_errno(status);
 		f->valid = 0;
 		if (act_open_has_tid(status))
-			release_tid(sc, GET_TID(cpl), &sc->sge.mgmtq);
+			release_tid(sc, GET_TID(cpl), &sc->sge.ctrlq[0]);
 		free_filter_resources(f);
+		remove_hf(sc, f);
 		if (f->locked == 0)
 			free(f, M_CXGBE);
 	}
@@ -935,8 +1267,9 @@ t4_hashfilter_tcb_rpl(struct sge_iq *iq, const struct rss_header *rss,
 		f->tid = EIO;
 		f->valid = 0;
 		free_filter_resources(f);
-		remove_hftid(sc, tid, f->fs.type ? 2 : 1);
-		release_tid(sc, tid, &sc->sge.mgmtq);
+		remove_hftid(sc, f);
+		remove_hf(sc, f);
+		release_tid(sc, tid, &sc->sge.ctrlq[0]);
 		if (f->locked == 0)
 			free(f, M_CXGBE);
 	}
@@ -966,8 +1299,9 @@ t4_del_hashfilter_rpl(struct sge_iq *iq, const struct rss_header *rss,
 	if (cpl->status == 0) {
 		f->valid = 0;
 		free_filter_resources(f);
-		remove_hftid(sc, tid, f->fs.type ? 2 : 1);
-		release_tid(sc, tid, &sc->sge.mgmtq);
+		remove_hftid(sc, f);
+		remove_hf(sc, f);
+		release_tid(sc, tid, &sc->sge.ctrlq[0]);
 		if (f->locked == 0)
 			free(f, M_CXGBE);
 	}
@@ -978,26 +1312,48 @@ t4_del_hashfilter_rpl(struct sge_iq *iq, const struct rss_header *rss,
 }
 
 static int
-get_hashfilter(struct adapter *sc, struct t4_filter *t)
+get_tcamfilter(struct adapter *sc, struct t4_filter *t)
 {
-	int i, nfilters = sc->tids.ntids;
+	int i, nfilters;
 	struct filter_entry *f;
+	u_int in_use;
+#ifdef INVARIANTS
+	u_int tid_base;
+#endif
 
-	if (sc->tids.tids_in_use == 0 || sc->tids.hftid_tab == NULL ||
-	    t->idx >= nfilters) {
+	MPASS(!t->fs.hash);
+
+	if (separate_hpfilter_region(sc) && t->fs.prio) {
+		nfilters = sc->tids.nhpftids;
+		f = sc->tids.hpftid_tab;
+		in_use = sc->tids.hpftids_in_use;
+#ifdef INVARIANTS
+		tid_base = sc->tids.hpftid_base;
+#endif
+	} else {
+		nfilters = sc->tids.nftids;
+		f = sc->tids.ftid_tab;
+		in_use = sc->tids.ftids_in_use;
+#ifdef INVARIANTS
+		tid_base = sc->tids.ftid_base;
+#endif
+	}
+
+	if (in_use == 0 || f == NULL || t->idx >= nfilters) {
 		t->idx = 0xffffffff;
 		return (0);
 	}
 
-	mtx_lock(&sc->tids.hftid_lock);
-	for (i = t->idx; i < nfilters; i++) {
-		f = lookup_hftid(sc, i);
-		if (f != NULL && f->valid) {
+	f += t->idx;
+	mtx_lock(&sc->tids.ftid_lock);
+	for (i = t->idx; i < nfilters; i++, f++) {
+		if (f->valid) {
+			MPASS(f->tid == tid_base + i);
 			t->idx = i;
 			t->l2tidx = f->l2te ? f->l2te->idx : 0;
-			t->smtidx = f->smtidx;
+			t->smtidx = f->smt ? f->smt->idx : 0;
 			if (f->fs.hitcnts)
-				t->hits = get_filter_hits(sc, t->idx);
+				t->hits = get_filter_hits(sc, f->tid);
 			else
 				t->hits = UINT64_MAX;
 			t->fs = f->fs;
@@ -1007,7 +1363,47 @@ get_hashfilter(struct adapter *sc, struct t4_filter *t)
 	}
 	t->idx = 0xffffffff;
 done:
-	mtx_unlock(&sc->tids.hftid_lock);
+	mtx_unlock(&sc->tids.ftid_lock);
+	return (0);
+}
+
+static int
+get_hashfilter(struct adapter *sc, struct t4_filter *t)
+{
+	struct tid_info *ti = &sc->tids;
+	int tid;
+	struct filter_entry *f;
+	const int inv_tid = ti->ntids + ti->tid_base;
+
+	MPASS(t->fs.hash);
+
+	if (ti->tids_in_use == 0 || ti->hftid_hash_tid == NULL ||
+	    t->idx >= inv_tid) {
+		t->idx = 0xffffffff;
+		return (0);
+	}
+	if (t->idx < ti->tid_base)
+		t->idx = ti->tid_base;
+
+	mtx_lock(&ti->hftid_lock);
+	for (tid = t->idx; tid < inv_tid; tid++) {
+		f = lookup_hftid(sc, tid);
+		if (f != NULL && f->valid) {
+			t->idx = tid;
+			t->l2tidx = f->l2te ? f->l2te->idx : 0;
+			t->smtidx = f->smt ? f->smt->idx : 0;
+			if (f->fs.hitcnts)
+				t->hits = get_filter_hits(sc, tid);
+			else
+				t->hits = UINT64_MAX;
+			t->fs = f->fs;
+
+			goto done;
+		}
+	}
+	t->idx = 0xffffffff;
+done:
+	mtx_unlock(&ti->hftid_lock);
 	return (0);
 }
 
@@ -1126,52 +1522,48 @@ act_open_cpl_len16(struct adapter *sc, int isipv6)
 
 static int
 set_hashfilter(struct adapter *sc, struct t4_filter *t, uint64_t ftuple,
-    struct l2t_entry *l2te)
+    struct l2t_entry *l2te, struct smt_entry *smt)
 {
 	void *wr;
 	struct wrq_cookie cookie;
 	struct filter_entry *f;
 	int rc, atid = -1;
+	uint32_t hash;
 
 	MPASS(t->fs.hash);
 	/* Already validated against fconf, iconf */
 	MPASS((t->fs.val.pfvf_vld & t->fs.val.ovlan_vld) == 0);
 	MPASS((t->fs.mask.pfvf_vld & t->fs.mask.ovlan_vld) == 0);
 
-	mtx_lock(&sc->tids.hftid_lock);
+	hash = hf_hashfn_4t(&t->fs);
 
-	/*
-	 * XXX: Check for hash collisions and insert in the hash based lookup
-	 * table so that in-flight hashfilters are also considered when checking
-	 * for collisions.
-	 */
+	mtx_lock(&sc->tids.hftid_lock);
+	if (lookup_hf(sc, &t->fs, hash) != NULL) {
+		rc = EEXIST;
+		goto done;
+	}
 
 	f = malloc(sizeof(*f), M_CXGBE, M_ZERO | M_NOWAIT);
 	if (__predict_false(f == NULL)) {
-		if (l2te)
-			t4_l2t_release(l2te);
 		rc = ENOMEM;
 		goto done;
 	}
 	f->fs = t->fs;
 	f->l2te = l2te;
+	f->smt = smt;
 
 	atid = alloc_atid(sc, f);
 	if (__predict_false(atid) == -1) {
-		if (l2te)
-			t4_l2t_release(l2te);
 		free(f, M_CXGBE);
 		rc = EAGAIN;
 		goto done;
 	}
 	MPASS(atid >= 0);
 
-	wr = start_wrq_wr(&sc->sge.mgmtq, act_open_cpl_len16(sc, f->fs.type),
+	wr = start_wrq_wr(&sc->sge.ctrlq[0], act_open_cpl_len16(sc, f->fs.type),
 	    &cookie);
 	if (wr == NULL) {
 		free_atid(sc, atid);
-		if (l2te)
-			t4_l2t_release(l2te);
 		free(f, M_CXGBE);
 		rc = ENOMEM;
 		goto done;
@@ -1184,7 +1576,8 @@ set_hashfilter(struct adapter *sc, struct t4_filter *t, uint64_t ftuple,
 	f->locked = 1; /* ithread mustn't free f if ioctl is still around. */
 	f->pending = 1;
 	f->tid = -1;
-	commit_wrq_wr(&sc->sge.mgmtq, wr, &cookie);
+	insert_hf(sc, f, hash);
+	commit_wrq_wr(&sc->sge.ctrlq[0], wr, &cookie);
 
 	for (;;) {
 		MPASS(f->locked);
@@ -1194,6 +1587,7 @@ set_hashfilter(struct adapter *sc, struct t4_filter *t, uint64_t ftuple,
 				f->locked = 0;
 				t->idx = f->tid;
 			} else {
+				remove_hf(sc, f);
 				rc = f->tid;
 				free(f, M_CXGBE);
 			}
@@ -1334,19 +1728,21 @@ mk_del_hashfilter_wr(int tid, struct work_request_hdr *wrh, int wrlen, int qid)
 static int
 del_hashfilter(struct adapter *sc, struct t4_filter *t)
 {
+	struct tid_info *ti = &sc->tids;
 	void *wr;
 	struct filter_entry *f;
 	struct wrq_cookie cookie;
 	int rc;
 	const int wrlen = del_hashfilter_wrlen();
+	const int inv_tid = ti->ntids + ti->tid_base;
 
-	MPASS(sc->tids.hftid_tab != NULL);
+	MPASS(sc->tids.hftid_hash_4t != NULL);
 	MPASS(sc->tids.ntids > 0);
 
-	if (t->idx >= sc->tids.ntids)
+	if (t->idx < sc->tids.tid_base || t->idx >= inv_tid)
 		return (EINVAL);
 
-	mtx_lock(&sc->tids.hftid_lock);
+	mtx_lock(&ti->hftid_lock);
 	f = lookup_hftid(sc, t->idx);
 	if (f == NULL || f->valid == 0) {
 		rc = EINVAL;
@@ -1361,7 +1757,7 @@ del_hashfilter(struct adapter *sc, struct t4_filter *t)
 		rc = EBUSY;
 		goto done;
 	}
-	wr = start_wrq_wr(&sc->sge.mgmtq, howmany(wrlen, 16), &cookie);
+	wr = start_wrq_wr(&sc->sge.ctrlq[0], howmany(wrlen, 16), &cookie);
 	if (wr == NULL) {
 		rc = ENOMEM;
 		goto done;
@@ -1370,7 +1766,7 @@ del_hashfilter(struct adapter *sc, struct t4_filter *t)
 	mk_del_hashfilter_wr(t->idx, wr, wrlen, sc->sge.fwq.abs_id);
 	f->locked = 1;
 	f->pending = 1;
-	commit_wrq_wr(&sc->sge.mgmtq, wr, &cookie);
+	commit_wrq_wr(&sc->sge.ctrlq[0], wr, &cookie);
 	t->fs = f->fs;	/* extra info for the caller */
 
 	for (;;) {
@@ -1385,50 +1781,15 @@ del_hashfilter(struct adapter *sc, struct t4_filter *t)
 			}
 			break;
 		}
-		if (cv_wait_sig(&sc->tids.hftid_cv, &sc->tids.hftid_lock) != 0) {
+		if (cv_wait_sig(&ti->hftid_cv, &ti->hftid_lock) != 0) {
 			f->locked = 0;
 			rc = EINPROGRESS;
 			break;
 		}
 	}
 done:
-	mtx_unlock(&sc->tids.hftid_lock);
+	mtx_unlock(&ti->hftid_lock);
 	return (rc);
-}
-
-static int
-set_tcb_field(struct adapter *sc, u_int tid, uint16_t word, uint64_t mask,
-    uint64_t val, int no_reply)
-{
-	struct wrq_cookie cookie;
-	struct cpl_set_tcb_field *req;
-
-	req = start_wrq_wr(&sc->sge.mgmtq, howmany(sizeof(*req), 16), &cookie);
-	if (req == NULL)
-		return (ENOMEM);
-	bzero(req, sizeof(*req));
-	INIT_TP_WR_MIT_CPL(req, CPL_SET_TCB_FIELD, tid);
-	if (no_reply == 0) {
-		req->reply_ctrl = htobe16(V_QUEUENO(sc->sge.fwq.abs_id) |
-		    V_NO_REPLY(0));
-	} else
-		req->reply_ctrl = htobe16(V_NO_REPLY(1));
-	req->word_cookie = htobe16(V_WORD(word) | V_COOKIE(CPL_COOKIE_HASHFILTER));
-	req->mask = htobe64(mask);
-	req->val = htobe64(val);
-	commit_wrq_wr(&sc->sge.mgmtq, req, &cookie);
-
-	return (0);
-}
-
-/* Set one of the t_flags bits in the TCB. */
-static inline int
-set_tcb_tflag(struct adapter *sc, int tid, u_int bit_pos, u_int val,
-    u_int no_reply)
-{
-
-	return (set_tcb_field(sc, tid,  W_TCB_T_FLAGS, 1ULL << bit_pos,
-	    (uint64_t)val << bit_pos, no_reply));
 }
 
 #define WORD_MASK       0xffffffff
@@ -1525,9 +1886,10 @@ configure_hashfilter_tcb(struct adapter *sc, struct filter_entry *f)
 	}
 
 	if (f->fs.newsmac) {
+		MPASS(f->smt != NULL);
 		set_tcb_tflag(sc, f->tid, S_TF_CCTRL_CWR, 1, 1);
 		set_tcb_field(sc, f->tid, W_TCB_SMAC_SEL,
-		    V_TCB_SMAC_SEL(M_TCB_SMAC_SEL), V_TCB_SMAC_SEL(f->smtidx),
+		    V_TCB_SMAC_SEL(M_TCB_SMAC_SEL), V_TCB_SMAC_SEL(f->smt->idx),
 		    1);
 		updated++;
 	}

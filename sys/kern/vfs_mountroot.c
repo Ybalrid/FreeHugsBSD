@@ -389,7 +389,7 @@ vfs_mountroot_shuffle(struct thread *td, struct mount *mpdevfs)
 		vfs_unbusy(mpdevfs);
 		/* Unlink the no longer needed /dev/dev -> / symlink */
 		error = kern_unlinkat(td, AT_FDCWD, "/dev/dev",
-		    UIO_SYSSPACE, 0);
+		    UIO_SYSSPACE, 0, 0);
 		if (error)
 			printf("mountroot: unable to unlink /dev/dev "
 			    "(error %d)\n", error);
@@ -508,7 +508,7 @@ parse_dir_ask(char **conf)
 	printf("      and with the specified (optional) option list.\n");
 	printf("\n");
 	printf("    eg. ufs:/dev/da0s1a\n");
-	printf("        zfs:tank\n");
+	printf("        zfs:zroot/ROOT/default\n");
 	printf("        cd9660:/dev/cd0 ro\n");
 	printf("          (which is equivalent to: ");
 	printf("mount -t cd9660 -o ro /dev/cd0 /)\n");
@@ -579,7 +579,7 @@ parse_dir_md(char **conf)
 
 	if (root_mount_mddev != -1) {
 		mdio->md_unit = root_mount_mddev;
-		error = kern_ioctl(td, fd, MDIOCDETACH, (void *)mdio);
+		(void)kern_ioctl(td, fd, MDIOCDETACH, (void *)mdio);
 		/* Ignore errors. We don't care. */
 		root_mount_mddev = -1;
 	}

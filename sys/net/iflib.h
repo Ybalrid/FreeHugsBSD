@@ -45,13 +45,6 @@ struct if_clone;
  */
 typedef uint16_t qidx_t;
 #define QIDX_INVALID 0xFFFF
-/*
- * Most cards can handle much larger TSO requests
- * but the FreeBSD TCP stack will break on larger
- * values
- */
-#define FREEBSD_TSO_SIZE_MAX 65518
-
 
 struct iflib_ctx;
 typedef struct iflib_ctx *if_ctx_t;
@@ -180,7 +173,7 @@ typedef struct pci_vendor_info {
 #define IFLIB_PNP_DESCR "U32:vendor;U32:device;U32:subvendor;U32:subdevice;" \
     "U32:revision;U32:class;D:#"
 #define IFLIB_PNP_INFO(b, u, t) \
-    MODULE_PNP_INFO(IFLIB_PNP_DESCR, b, u, t, sizeof(t[0]), nitems(t) - 1)
+    MODULE_PNP_INFO(IFLIB_PNP_DESCR, b, u, t, nitems(t) - 1)
 
 typedef struct if_txrx {
 	int (*ift_txd_encap) (void *, if_pkt_info_t);
@@ -216,6 +209,7 @@ typedef struct if_softc_ctx {
 	int isc_tx_tso_size_max;
 	int isc_tx_tso_segsize_max;
 	int isc_tx_csum_flags;
+	int isc_capabilities;
 	int isc_capenable;
 	int isc_rss_table_size;
 	int isc_rss_table_mask;
@@ -242,6 +236,8 @@ struct if_shared_ctx {
 	bus_size_t isc_q_align;
 	bus_size_t isc_tx_maxsize;
 	bus_size_t isc_tx_maxsegsize;
+	bus_size_t isc_tso_maxsize;
+	bus_size_t isc_tso_maxsegsize;
 	bus_size_t isc_rx_maxsize;
 	bus_size_t isc_rx_maxsegsize;
 	int isc_rx_nsegments;
@@ -250,7 +246,7 @@ struct if_shared_ctx {
 	/* fields necessary for probe */
 	pci_vendor_info_t *isc_vendor_info;
 	char *isc_driver_version;
-/* optional function to transform the read values to match the table*/
+	/* optional function to transform the read values to match the table*/
 	void (*isc_parse_devinfo) (uint16_t *device_id, uint16_t *subvendor_id,
 				   uint16_t *subdevice_id, uint16_t *rev_id);
 	int isc_nrxd_min[8];
@@ -358,7 +354,10 @@ typedef enum {
  * autogenerate a MAC address
  */
 #define IFLIB_GEN_MAC	0x08000
-
+/*
+ * Interface needs admin task to ignore interface up/down status
+ */
+#define IFLIB_ADMIN_ALWAYS_RUN	0x10000
 
 
 /*
@@ -376,6 +375,8 @@ if_softc_ctx_t iflib_get_softc_ctx(if_ctx_t ctx);
 if_shared_ctx_t iflib_get_sctx(if_ctx_t ctx);
 
 void iflib_set_mac(if_ctx_t ctx, uint8_t mac[ETHER_ADDR_LEN]);
+void iflib_request_reset(if_ctx_t ctx);
+uint8_t iflib_in_detach(if_ctx_t ctx);
 
 /*
  * If the driver can plug cleanly in to newbus use these
@@ -401,11 +402,11 @@ int iflib_device_deregister(if_ctx_t);
 
 
 
-int iflib_irq_alloc(if_ctx_t, if_irq_t, int, driver_filter_t, void *filter_arg, driver_intr_t, void *arg, char *name);
+int iflib_irq_alloc(if_ctx_t, if_irq_t, int, driver_filter_t, void *filter_arg, driver_intr_t, void *arg, const char *name);
 int iflib_irq_alloc_generic(if_ctx_t ctx, if_irq_t irq, int rid,
-							iflib_intr_type_t type, driver_filter_t *filter,
-							void *filter_arg, int qid, char *name);
-void iflib_softirq_alloc_generic(if_ctx_t ctx, if_irq_t irq, iflib_intr_type_t type,  void *arg, int qid, char *name);
+			    iflib_intr_type_t type, driver_filter_t *filter,
+			    void *filter_arg, int qid, const char *name);
+void iflib_softirq_alloc_generic(if_ctx_t ctx, if_irq_t irq, iflib_intr_type_t type,  void *arg, int qid, const char *name);
 
 void iflib_irq_free(if_ctx_t ctx, if_irq_t irq);
 

@@ -615,6 +615,12 @@ print_status(struct pf_status *s, int opts)
 }
 
 void
+print_running(struct pf_status *status)
+{
+	printf("%s\n", status->running ? "Enabled" : "Disabled");
+}
+
+void
 print_src_node(struct pf_src_node *sn, int opts)
 {
 	struct pf_addr_wrap aw;
@@ -1360,6 +1366,9 @@ ifa_lookup(const char *ifa_name, int flags)
 		last_if = p->ifname;
 		if ((flags & PFI_AFLAG_NOALIAS) && p->af == AF_INET && got4)
 			continue;
+		if ((flags & PFI_AFLAG_NOALIAS) && p->af == AF_INET6 &&
+		    IN6_IS_ADDR_LINKLOCAL(&p->addr.v.a.addr.v6))
+			continue;
 		if ((flags & PFI_AFLAG_NOALIAS) && p->af == AF_INET6 && got6)
 			continue;
 		if (p->af == AF_INET)
@@ -1394,6 +1403,7 @@ ifa_lookup(const char *ifa_name, int flags)
 				set_ipmask(n, 128);
 		}
 		n->ifindex = p->ifindex;
+		n->ifname = strdup(p->ifname);
 
 		n->next = NULL;
 		n->tail = n;

@@ -218,7 +218,7 @@ trap(struct trapframe *frame)
 	type = frame->tf_trapno;
 
 	KASSERT((read_eflags() & PSL_I) == 0,
-	    ("trap: interrupts enaabled, type %d frame %p", type, frame));
+	    ("trap: interrupts enabled, type %d frame %p", type, frame));
 
 #ifdef SMP
 	/* Handler for NMI IPIs used for stopping CPUs. */
@@ -248,7 +248,7 @@ trap(struct trapframe *frame)
 		 * return immediately.
 		 */
 		if (pmc_intr != NULL &&
-		    (*pmc_intr)(PCPU_GET(cpuid), frame) != 0)
+		    (*pmc_intr)(frame) != 0)
 			return;
 #endif
 
@@ -337,8 +337,14 @@ user_trctrap_out:
 			signo = SIGTRAP;
 			ucode = TRAP_TRACE;
 			dr6 = rdr6();
-			if (dr6 & DBREG_DR6_BS)
-				frame->tf_eflags &= ~PSL_T;
+			if ((dr6 & DBREG_DR6_BS) != 0) {
+				PROC_LOCK(td->td_proc);
+				if ((td->td_dbgflags & TDB_STEP) != 0) {
+					td->td_frame->tf_eflags &= ~PSL_T;
+					td->td_dbgflags &= ~TDB_STEP;
+				}
+				PROC_UNLOCK(td->td_proc);
+			}
 			break;
 
 		case T_ARITHTRAP:	/* arithmetic trap */
@@ -357,7 +363,6 @@ user_trctrap_out:
 			if (frame->tf_eflags & PSL_VM) {
 				signo = vm86_emulate((struct vm86frame *)frame);
 				if (signo == SIGTRAP) {
-					type = T_TRCTRAP;
 					load_dr6(rdr6() | 0x4000);
 					goto user_trctrap_out;
 				}
@@ -757,12 +762,6 @@ kernel_trctrap:
 	KASSERT((read_eflags() & PSL_I) != 0, ("interrupts disabled"));
 	trapsignal(td, &ksi);
 
-	/*
-	 * Clear any pending debug exceptions after allowing a
-	 * debugger to read DR6 while stopped in trapsignal().
-	 */
-	if (type == T_TRCTRAP)
-		load_dr6(0);
 user:
 	userret(td, frame);
 	KASSERT(PCB_USER_FPU(td->td_pcb),
@@ -978,7 +977,7 @@ trap_fatal(frame, eva)
 	    curproc->p_pid, curthread->td_name);
 
 #ifdef KDB
-	if (debugger_on_panic) {
+	if (debugger_on_trap) {
 		kdb_why = KDB_WHY_TRAP;
 		frame->tf_err = eva;	/* smuggle fault address to ddb */
 		handled = kdb_trap(type, 0, frame);

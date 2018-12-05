@@ -227,9 +227,18 @@ struct prison_racct {
 #define	PR_ALLOW_MOUNT			0x00000010
 #define	PR_ALLOW_QUOTAS			0x00000020
 #define	PR_ALLOW_SOCKET_AF		0x00000040
+#define	PR_ALLOW_MLOCK			0x00000080
+#define	PR_ALLOW_READ_MSGBUF		0x00000100
+#define	PR_ALLOW_UNPRIV_DEBUG		0x00000200
 #define	PR_ALLOW_RESERVED_PORTS		0x00008000
 #define	PR_ALLOW_KMEM_ACCESS		0x00010000	/* reserved, not used yet */
-#define	PR_ALLOW_ALL_STATIC		0x0001807f
+#define	PR_ALLOW_ALL_STATIC		0x000183ff
+
+/*
+ * PR_ALLOW_DIFFERENCES determines which flags are able to be
+ * different between the parent and child jail upon creation.
+ */
+#define	PR_ALLOW_DIFFERENCES		(PR_ALLOW_UNPRIV_DEBUG)
 
 /*
  * OSD methods
@@ -409,6 +418,8 @@ int prison_if(struct ucred *cred, struct sockaddr *sa);
 char *prison_name(struct prison *, struct prison *);
 int prison_priv_check(struct ucred *cred, int priv);
 int sysctl_jail_param(SYSCTL_HANDLER_ARGS);
+unsigned prison_add_allow(const char *prefix, const char *name,
+    const char *prefix_descr, const char *descr);
 void prison_add_vfs(struct vfsconf *vfsp);
 void prison_racct_foreach(void (*callback)(struct racct *racct,
     void *arg2, void *arg3), void (*pre)(void), void (*post)(void),

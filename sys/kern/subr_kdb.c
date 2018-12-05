@@ -580,14 +580,12 @@ kdb_thr_first(void)
 	struct proc *p;
 	struct thread *thr;
 
-	p = LIST_FIRST(&allproc);
-	while (p != NULL) {
+	FOREACH_PROC_IN_SYSTEM(p) {
 		if (p->p_flag & P_INMEM) {
 			thr = FIRST_THREAD_IN_PROC(p);
 			if (thr != NULL)
 				return (thr);
 		}
-		p = LIST_NEXT(p, p_list);
 	}
 	return (NULL);
 }
@@ -597,11 +595,9 @@ kdb_thr_from_pid(pid_t pid)
 {
 	struct proc *p;
 
-	p = LIST_FIRST(&allproc);
-	while (p != NULL) {
+	FOREACH_PROC_IN_SYSTEM(p) {
 		if (p->p_flag & P_INMEM && p->p_pid == pid)
 			return (FIRST_THREAD_IN_PROC(p));
-		p = LIST_NEXT(p, p_list);
 	}
 	return (NULL);
 }
@@ -656,9 +652,7 @@ kdb_trap(int type, int code, struct trapframe *tf)
 	struct kdb_dbbe *be;
 	register_t intr;
 	int handled;
-#ifdef SMP
 	int did_stop_cpus;
-#endif
 
 	be = kdb_dbbe;
 	if (be == NULL || be->dbbe_trap == NULL)
@@ -670,16 +664,17 @@ kdb_trap(int type, int code, struct trapframe *tf)
 
 	intr = intr_disable();
 
-#ifdef SMP
 	if (!SCHEDULER_STOPPED()) {
+#ifdef SMP
 		other_cpus = all_cpus;
 		CPU_NAND(&other_cpus, &stopped_cpus);
 		CPU_CLR(PCPU_GET(cpuid), &other_cpus);
 		stop_cpus_hard(other_cpus);
+#endif
+		curthread->td_stopsched = 1;
 		did_stop_cpus = 1;
 	} else
 		did_stop_cpus = 0;
-#endif
 
 	kdb_active++;
 
@@ -707,11 +702,13 @@ kdb_trap(int type, int code, struct trapframe *tf)
 
 	kdb_active--;
 
+	if (did_stop_cpus) {
+		curthread->td_stopsched = 0;
 #ifdef SMP
-	CPU_AND(&other_cpus, &stopped_cpus);
-	if (did_stop_cpus)
+		CPU_AND(&other_cpus, &stopped_cpus);
 		restart_cpus(other_cpus);
 #endif
+	}
 
 	intr_restore(intr);
 

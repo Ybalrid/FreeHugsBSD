@@ -116,6 +116,7 @@ cpu_getmaxphyaddr(void)
 #endif
 }
 
+bool	acpi_get_fadt_bootflags(uint16_t *flagsp);
 void	*alloc_fpusave(int flags);
 void	busdma_swi(void);
 bool	cpu_mwait_usable(void);
@@ -128,6 +129,7 @@ void	dump_drop_page(vm_paddr_t);
 void	finishidentcpu(void);
 void	identify_cpu1(void);
 void	identify_cpu2(void);
+void	identify_cpu_fixup_bsp(void);
 void	identify_hypervisor(void);
 void	initializecpu(void);
 void	initializecpucache(void);

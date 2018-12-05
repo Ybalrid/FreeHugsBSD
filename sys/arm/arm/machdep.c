@@ -77,6 +77,7 @@ __FBSDID("$FreeBSD$");
 #include <vm/vm_page.h>
 #include <vm/vm_pager.h>
 
+#include <machine/asm.h>
 #include <machine/debug_monitor.h>
 #include <machine/machdep.h>
 #include <machine/metadata.h>
@@ -107,6 +108,10 @@ __FBSDID("$FreeBSD$");
 
 #if __ARM_ARCH >= 6 && !defined(INTRNG)
 #error armv6 requires INTRNG
+#endif
+
+#ifndef _ARM_ARCH_5E
+#error FreeBSD requires ARMv5 or later
 #endif
 
 struct pcpu __pcpu[MAXCPU];
@@ -272,8 +277,22 @@ cpu_flush_dcache(void *ptr, size_t len)
 int
 cpu_est_clockrate(int cpu_id, uint64_t *rate)
 {
+#if __ARM_ARCH >= 6
+	struct pcpu *pc;
 
+	pc = pcpu_find(cpu_id);
+	if (pc == NULL || rate == NULL)
+		return (EINVAL);
+
+	if (pc->pc_clock == 0)
+		return (EOPNOTSUPP);
+
+	*rate = pc->pc_clock;
+
+	return (0);
+#else
 	return (ENXIO);
+#endif
 }
 
 void
@@ -622,6 +641,7 @@ sendsig(catcher, ksi, mask)
 	/* make the stack aligned */
 	fp = (struct sigframe *)STACKALIGN(fp);
 	/* Populate the siginfo frame. */
+	bzero(&frame, sizeof(frame));
 	get_mcontext(td, &frame.sf_uc.uc_mcontext, 0);
 #ifdef VFP
 	get_vfpcontext(td, &frame.sf_vfp);
@@ -633,9 +653,9 @@ sendsig(catcher, ksi, mask)
 #endif
 	frame.sf_si = ksi->ksi_info;
 	frame.sf_uc.uc_sigmask = *mask;
-	frame.sf_uc.uc_stack.ss_flags = (td->td_pflags & TDP_ALTSTACK )
-	    ? ((onstack) ? SS_ONSTACK : 0) : SS_DISABLE;
 	frame.sf_uc.uc_stack = td->td_sigstk;
+	frame.sf_uc.uc_stack.ss_flags = (td->td_pflags & TDP_ALTSTACK) != 0 ?
+	    (onstack ? SS_ONSTACK : 0) : SS_DISABLE;
 	mtx_unlock(&psp->ps_mtx);
 	PROC_UNLOCK(td->td_proc);
 

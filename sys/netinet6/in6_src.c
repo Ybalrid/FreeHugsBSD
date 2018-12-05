@@ -127,7 +127,7 @@ static struct sx addrsel_sxlock;
 #define	ADDRSEL_XUNLOCK()	sx_xunlock(&addrsel_sxlock)
 
 #define ADDR_LABEL_NOTAPP (-1)
-static VNET_DEFINE(struct in6_addrpolicy, defaultaddrpolicy);
+VNET_DEFINE_STATIC(struct in6_addrpolicy, defaultaddrpolicy);
 #define	V_defaultaddrpolicy		VNET(defaultaddrpolicy)
 
 VNET_DEFINE(int, ip6_prefer_tempaddr) = 0;
@@ -973,7 +973,7 @@ in6_pcbsetport(struct in6_addr *laddr, struct inpcb *inp, struct ucred *cred)
 		return(error);
 
 	/* XXX: this is redundant when called from in6_pcbbind */
-	if ((so->so_options & (SO_REUSEADDR|SO_REUSEPORT)) == 0)
+	if ((so->so_options & (SO_REUSEADDR|SO_REUSEPORT|SO_REUSEPORT_LB)) == 0)
 		lookupflags = INPLOOKUP_WILDCARD;
 
 	inp->inp_flags |= INP_ANONPORT;
@@ -1094,7 +1094,7 @@ struct addrsel_policyent {
 
 TAILQ_HEAD(addrsel_policyhead, addrsel_policyent);
 
-static VNET_DEFINE(struct addrsel_policyhead, addrsel_policytab);
+VNET_DEFINE_STATIC(struct addrsel_policyhead, addrsel_policytab);
 #define	V_addrsel_policytab		VNET(addrsel_policytab)
 
 static void

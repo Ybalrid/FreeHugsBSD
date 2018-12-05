@@ -32,10 +32,8 @@
  * SUCH DAMAGE.
  */
 
-#if defined(LIBC_SCCS) && !defined(lint)
-static char sccsid[] = "@(#)sysconf.c	8.2 (Berkeley) 3/20/94";
-#endif /* LIBC_SCCS and not lint */
 #include <sys/cdefs.h>
+__SCCSID("@(#)sysconf.c	8.2 (Berkeley) 3/20/94");
 __FBSDID("$FreeBSD$");
 
 #include "namespace.h"
@@ -293,10 +291,7 @@ do_NAME_MAX:
 		mib[1] = CTL_P1003_1B_MQ_OPEN_MAX;
 		goto yesno;
 	case _SC_PAGESIZE:
-		defaultresult = getpagesize();
-		mib[0] = CTL_P1003_1B;
-		mib[1] = CTL_P1003_1B_PAGESIZE;
-		goto yesno;
+		return (getpagesize());
 	case _SC_RTSIG_MAX:
 		mib[0] = CTL_P1003_1B;
 		mib[1] = CTL_P1003_1B_RTSIG_MAX;

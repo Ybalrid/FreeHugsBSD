@@ -44,9 +44,11 @@ static char sccsid[] = "@(#)wc.c	8.1 (Berkeley) 6/6/93";
 #include <sys/cdefs.h>
 __FBSDID("$FreeBSD$");
 
+#include <sys/capsicum.h>
 #include <sys/param.h>
 #include <sys/stat.h>
 
+#include <capsicum_helpers.h>
 #include <ctype.h>
 #include <err.h>
 #include <errno.h>
@@ -61,6 +63,10 @@ __FBSDID("$FreeBSD$");
 #include <wctype.h>
 #include <libxo/xo.h>
 
+#include <libcasper.h>
+#include <casper/cap_fileargs.h>
+
+static fileargs_t *fa;
 static uintmax_t tlinect, twordct, tcharct, tlongline;
 static int doline, doword, dochar, domulti, dolongline;
 static volatile sig_atomic_t siginfo;
@@ -90,6 +96,7 @@ int
 main(int argc, char *argv[])
 {
 	int ch, errors, total;
+	cap_rights_t rights;
 
 	(void) setlocale(LC_CTYPE, "");
 
@@ -125,6 +132,26 @@ main(int argc, char *argv[])
 
 	(void)signal(SIGINFO, siginfo_handler);
 
+	fa = fileargs_init(argc, argv, O_RDONLY, 0,
+	    cap_rights_init(&rights, CAP_READ, CAP_FSTAT));
+	if (fa == NULL) {
+		xo_warn("Unable to init casper");
+		exit(1);
+	}
+
+	caph_cache_catpages();
+	if (caph_limit_stdio() < 0) {
+		xo_warn("Unable to limit stdio");
+		fileargs_free(fa);
+		exit(1);
+	}
+
+	if (caph_enter_casper() < 0) {
+		xo_warn("Unable to enter capability mode");
+		fileargs_free(fa);
+		exit(1);
+	}
+
 	/* Wc's flags are on by default. */
 	if (doline + doword + dochar + domulti + dolongline == 0)
 		doline = doword = dochar = 1;
@@ -158,6 +185,7 @@ main(int argc, char *argv[])
 		xo_close_container("total");
 	}
 
+	fileargs_free(fa);
 	xo_close_container("wc");
 	xo_finish();
 	exit(errors == 0 ? 0 : 1);
@@ -206,7 +234,7 @@ cnt(const char *file)
 	linect = wordct = charct = llct = tmpll = 0;
 	if (file == NULL)
 		fd = STDIN_FILENO;
-	else if ((fd = open(file, O_RDONLY, 0)) < 0) {
+	else if ((fd = fileargs_open(fa, file)) < 0) {
 		xo_warn("%s: open", file);
 		return (1);
 	}
@@ -216,7 +244,7 @@ cnt(const char *file)
 	 * If all we need is the number of characters and it's a regular file,
 	 * just stat it.
 	 */
-	if (doline == 0) {
+	if (doline == 0 && dolongline == 0) {
 		if (fstat(fd, &sb)) {
 			xo_warn("%s: fstat", file);
 			(void)close(fd);
@@ -246,7 +274,7 @@ cnt(const char *file)
 		if (siginfo)
 			show_cnt(file, linect, wordct, charct, llct);
 		charct += len;
-		if (doline) {
+		if (doline || dolongline) {
 			for (p = buf; len--; ++p)
 				if (*p == '\n') {
 					if (tmpll > llct)
@@ -262,10 +290,8 @@ cnt(const char *file)
 		tlinect += linect;
 	if (dochar)
 		tcharct += charct;
-	if (dolongline) {
-		if (llct > tlongline)
-			tlongline = llct;
-	}
+	if (dolongline && llct > tlongline)
+		tlongline = llct;
 	show_cnt(file, linect, wordct, charct, llct);
 	(void)close(fd);
 	return (0);
@@ -331,10 +357,8 @@ word:	gotsp = 1;
 		twordct += wordct;
 	if (dochar || domulti)
 		tcharct += charct;
-	if (dolongline) {
-		if (llct > tlongline)
-			tlongline = llct;
-	}
+	if (dolongline && llct > tlongline)
+		tlongline = llct;
 	show_cnt(file, linect, wordct, charct, llct);
 	(void)close(fd);
 	return (0);

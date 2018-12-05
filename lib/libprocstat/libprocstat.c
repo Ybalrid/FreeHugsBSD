@@ -588,6 +588,10 @@ procstat_getfiles_kvm(struct procstat *procstat, struct kinfo_proc *kp, int mmap
 			type = PS_FST_TYPE_PROCDESC;
 			data = file.f_data;
 			break;
+		case DTYPE_DEV:
+			type = PS_FST_TYPE_DEV;
+			data = file.f_data;
+			break;
 		default:
 			continue;
 		}
@@ -673,6 +677,7 @@ kinfo_type2fst(int kftype)
 	} kftypes2fst[] = {
 		{ KF_TYPE_PROCDESC, PS_FST_TYPE_PROCDESC },
 		{ KF_TYPE_CRYPTO, PS_FST_TYPE_CRYPTO },
+		{ KF_TYPE_DEV, PS_FST_TYPE_DEV },
 		{ KF_TYPE_FIFO, PS_FST_TYPE_FIFO },
 		{ KF_TYPE_KQUEUE, PS_FST_TYPE_KQUEUE },
 		{ KF_TYPE_MQUEUE, PS_FST_TYPE_MQUEUE },
@@ -2192,6 +2197,7 @@ procstat_getrlimit_core(struct procstat_core *core, int which,
 		return (-1);
 	}
 	*rlimit = rlimits[which];
+	free(rlimits);
 	return (0);
 }
 

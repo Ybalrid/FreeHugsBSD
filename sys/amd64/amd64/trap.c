@@ -161,6 +161,20 @@ SYSCTL_INT(_machdep, OID_AUTO, uprintf_signal, CTLFLAG_RWTUN,
     "Print debugging information on trap signal to ctty");
 
 /*
+ * Control L1D flush on return from NMI.
+ *
+ * Tunable  can be set to the following values:
+ * 0 - only enable flush on return from NMI if required by vmm.ko (default)
+ * >1 - always flush on return from NMI.
+ *
+ * Post-boot, the sysctl indicates if flushing is currently enabled.
+ */
+int nmi_flush_l1d_sw;
+SYSCTL_INT(_machdep, OID_AUTO, nmi_flush_l1d_sw, CTLFLAG_RWTUN,
+    &nmi_flush_l1d_sw, 0,
+    "Flush L1 Data Cache on NMI exit, software bhyve L1TF mitigation assist");
+
+/*
  * Exception, fault, and trap interface to the FreeBSD kernel.
  * This common code is called from assembly language IDT gate entry
  * routines that prepare a suitable stack frame, and restore this
@@ -214,7 +228,7 @@ trap(struct trapframe *frame)
 		 * the NMI was consumed by it and we can return immediately.
 		 */
 		if (pmc_intr != NULL &&
-		    (*pmc_intr)(PCPU_GET(cpuid), frame) != 0)
+		    (*pmc_intr)(frame) != 0)
 			return;
 #endif
 
@@ -285,8 +299,14 @@ trap(struct trapframe *frame)
 			signo = SIGTRAP;
 			ucode = TRAP_TRACE;
 			dr6 = rdr6();
-			if (dr6 & DBREG_DR6_BS)
-				frame->tf_rflags &= ~PSL_T;
+			if ((dr6 & DBREG_DR6_BS) != 0) {
+				PROC_LOCK(td->td_proc);
+				if ((td->td_dbgflags & TDB_STEP) != 0) {
+					td->td_frame->tf_rflags &= ~PSL_T;
+					td->td_dbgflags &= ~TDB_STEP;
+				}
+				PROC_UNLOCK(td->td_proc);
+			}
 			break;
 
 		case T_ARITHTRAP:	/* arithmetic trap */
@@ -639,12 +659,6 @@ trap(struct trapframe *frame)
 	KASSERT((read_rflags() & PSL_I) != 0, ("interrupts disabled"));
 	trapsignal(td, &ksi);
 
-	/*
-	 * Clear any pending debug exceptions after allowing a
-	 * debugger to read DR6 while stopped in trapsignal().
-	 */
-	if (type == T_TRCTRAP)
-		load_dr6(0);
 userret:
 	userret(td, frame);
 	KASSERT(PCB_USER_FPU(td->td_pcb),
@@ -665,6 +679,35 @@ trap_check(struct trapframe *frame)
 		return;
 #endif
 	trap(frame);
+}
+
+static bool
+trap_is_smap(struct trapframe *frame)
+{
+
+	/*
+	 * A page fault on a userspace address is classified as
+	 * SMAP-induced if:
+	 * - SMAP is supported;
+	 * - kernel mode accessed present data page;
+	 * - rflags.AC was cleared.
+	 * Kernel must never access user space with rflags.AC cleared
+	 * if SMAP is enabled.
+	 */
+	return ((cpu_stdext_feature & CPUID_STDEXT_SMAP) != 0 &&
+	    (frame->tf_err & (PGEX_P | PGEX_U | PGEX_I | PGEX_RSV)) ==
+	    PGEX_P && (frame->tf_rflags & PSL_AC) == 0);
+}
+
+static bool
+trap_is_pti(struct trapframe *frame)
+{
+
+	return (PCPU_GET(curpmap)->pm_ucr3 != PMAP_NO_CR3 &&
+	    pg_nx != 0 && (frame->tf_err & (PGEX_P | PGEX_W |
+	    PGEX_U | PGEX_I)) == (PGEX_P | PGEX_U | PGEX_I) &&
+	    (curpcb->pcb_saved_ucr3 & ~CR3_PCID_MASK) ==
+	    (PCPU_GET(curpmap)->pm_cr3 & ~CR3_PCID_MASK));
 }
 
 static int
@@ -744,9 +787,13 @@ trap_pfault(struct trapframe *frame, int usermode)
 		 * handling routine.  Since accessing the address
 		 * without the handler is a bug, do not try to handle
 		 * it normally, and panic immediately.
+		 *
+		 * If SMAP is enabled, filter SMAP faults also,
+		 * because illegal access might occur to the mapped
+		 * user address, causing infinite loop.
 		 */
 		if (!usermode && (td->td_intr_nesting_level != 0 ||
-		    curpcb->pcb_onfault == NULL)) {
+		    trap_is_smap(frame) || curpcb->pcb_onfault == NULL)) {
 			trap_fatal(frame, eva);
 			return (-1);
 		}
@@ -764,11 +811,8 @@ trap_pfault(struct trapframe *frame, int usermode)
 	 * If nx protection of the usermode portion of kernel page
 	 * tables caused trap, panic.
 	 */
-	if (pti && usermode && pg_nx != 0 && (frame->tf_err & (PGEX_P | PGEX_W |
-	    PGEX_U | PGEX_I)) == (PGEX_P | PGEX_U | PGEX_I) &&
-	    (curpcb->pcb_saved_ucr3 & ~CR3_PCID_MASK)==
-	    (PCPU_GET(curpmap)->pm_cr3 & ~CR3_PCID_MASK))
-		panic("PTI: pid %d comm %s tf_err %#lx\n", p->p_pid,
+	if (usermode && trap_is_pti(frame))
+		panic("PTI: pid %d comm %s tf_err %#lx", p->p_pid,
 		    p->p_comm, frame->tf_err);
 
 	/*
@@ -872,7 +916,7 @@ trap_fatal(frame, eva)
 	    curproc->p_pid, curthread->td_name);
 
 #ifdef KDB
-	if (debugger_on_panic) {
+	if (debugger_on_trap) {
 		kdb_why = KDB_WHY_TRAP;
 		handled = kdb_trap(type, 0, frame);
 		kdb_why = KDB_WHY_UNSET;
@@ -926,21 +970,19 @@ dblfault_handler(struct trapframe *frame)
 	panic("double fault");
 }
 
-int
-cpu_fetch_syscall_args(struct thread *td)
+static int __noinline
+cpu_fetch_syscall_args_fallback(struct thread *td, struct syscall_args *sa)
 {
 	struct proc *p;
 	struct trapframe *frame;
 	register_t *argp;
-	struct syscall_args *sa;
 	caddr_t params;
 	int reg, regcnt, error;
 
 	p = td->td_proc;
 	frame = td->td_frame;
-	sa = &td->td_sa;
 	reg = 0;
-	regcnt = 6;
+	regcnt = NARGREGS;
 
 	sa->code = frame->tf_rax;
 
@@ -958,27 +1000,139 @@ cpu_fetch_syscall_args(struct thread *td)
  		sa->callp = &p->p_sysent->sv_table[sa->code];
 
 	sa->narg = sa->callp->sy_narg;
-	KASSERT(sa->narg <= sizeof(sa->args) / sizeof(sa->args[0]),
-	    ("Too many syscall arguments!"));
-	error = 0;
+	KASSERT(sa->narg <= nitems(sa->args), ("Too many syscall arguments!"));
 	argp = &frame->tf_rdi;
 	argp += reg;
-	memcpy(sa->args, argp, sizeof(sa->args[0]) * 6);
+	memcpy(sa->args, argp, sizeof(sa->args[0]) * NARGREGS);
 	if (sa->narg > regcnt) {
 		params = (caddr_t)frame->tf_rsp + sizeof(register_t);
 		error = copyin(params, &sa->args[regcnt],
 	    	    (sa->narg - regcnt) * sizeof(sa->args[0]));
+		if (__predict_false(error != 0))
+			return (error);
 	}
 
-	if (error == 0) {
-		td->td_retval[0] = 0;
-		td->td_retval[1] = frame->tf_rdx;
-	}
+	td->td_retval[0] = 0;
+	td->td_retval[1] = frame->tf_rdx;
 
-	return (error);
+	return (0);
+}
+
+int
+cpu_fetch_syscall_args(struct thread *td)
+{
+	struct proc *p;
+	struct trapframe *frame;
+	struct syscall_args *sa;
+
+	p = td->td_proc;
+	frame = td->td_frame;
+	sa = &td->td_sa;
+
+	sa->code = frame->tf_rax;
+
+	if (__predict_false(sa->code == SYS_syscall ||
+	    sa->code == SYS___syscall ||
+	    sa->code >= p->p_sysent->sv_size))
+		return (cpu_fetch_syscall_args_fallback(td, sa));
+
+	sa->callp = &p->p_sysent->sv_table[sa->code];
+	sa->narg = sa->callp->sy_narg;
+	KASSERT(sa->narg <= nitems(sa->args), ("Too many syscall arguments!"));
+
+	if (p->p_sysent->sv_mask)
+		sa->code &= p->p_sysent->sv_mask;
+
+	if (__predict_false(sa->narg > NARGREGS))
+		return (cpu_fetch_syscall_args_fallback(td, sa));
+
+	memcpy(sa->args, &frame->tf_rdi, sizeof(sa->args[0]) * NARGREGS);
+
+	td->td_retval[0] = 0;
+	td->td_retval[1] = frame->tf_rdx;
+
+	return (0);
 }
 
 #include "../../kern/subr_syscall.c"
+
+static void (*syscall_ret_l1d_flush)(void);
+int syscall_ret_l1d_flush_mode;
+
+static void
+flush_l1d_hw(void)
+{
+
+	wrmsr(MSR_IA32_FLUSH_CMD, IA32_FLUSH_CMD_L1D);
+}
+
+static void __inline
+amd64_syscall_ret_flush_l1d_inline(int error)
+{
+	void (*p)(void);
+
+	if (error != 0 && error != EEXIST && error != EAGAIN &&
+	    error != EXDEV && error != ENOENT && error != ENOTCONN &&
+	    error != EINPROGRESS) {
+		p = syscall_ret_l1d_flush;
+		if (p != NULL)
+			p();
+	}
+}
+
+void
+amd64_syscall_ret_flush_l1d(int error)
+{
+
+	amd64_syscall_ret_flush_l1d_inline(error);
+}
+
+void
+amd64_syscall_ret_flush_l1d_recalc(void)
+{
+	bool l1d_hw;
+
+	l1d_hw = (cpu_stdext_feature3 & CPUID_STDEXT3_L1D_FLUSH) != 0;
+again:
+	switch (syscall_ret_l1d_flush_mode) {
+	case 0:
+		syscall_ret_l1d_flush = NULL;
+		break;
+	case 1:
+		syscall_ret_l1d_flush = l1d_hw ? flush_l1d_hw :
+		    flush_l1d_sw_abi;
+		break;
+	case 2:
+		syscall_ret_l1d_flush = l1d_hw ? flush_l1d_hw : NULL;
+		break;
+	case 3:
+		syscall_ret_l1d_flush = flush_l1d_sw_abi;
+		break;
+	default:
+		syscall_ret_l1d_flush_mode = 1;
+		goto again;
+	}
+}
+
+static int
+machdep_syscall_ret_flush_l1d(SYSCTL_HANDLER_ARGS)
+{
+	int error, val;
+
+	val = syscall_ret_l1d_flush_mode;
+	error = sysctl_handle_int(oidp, &val, 0, req);
+	if (error != 0 || req->newptr == NULL)
+		return (error);
+	syscall_ret_l1d_flush_mode = val;
+	amd64_syscall_ret_flush_l1d_recalc();
+	return (0);
+}
+SYSCTL_PROC(_machdep, OID_AUTO, syscall_ret_flush_l1d, CTLTYPE_INT |
+    CTLFLAG_RWTUN | CTLFLAG_NOFETCH | CTLFLAG_MPSAFE, NULL, 0,
+    machdep_syscall_ret_flush_l1d, "I",
+    "Flush L1D on syscall return with error (0 - off, 1 - on, "
+    "2 - use hw only, 3 - use sw only");
+
 
 /*
  * System call handler for native binaries.  The trap frame is already
@@ -1034,4 +1188,6 @@ amd64_syscall(struct thread *td, int traced)
 	 */
 	if (__predict_false(td->td_frame->tf_rip >= VM_MAXUSER_ADDRESS))
 		set_pcb_flags(td->td_pcb, PCB_FULL_IRET);
+
+	amd64_syscall_ret_flush_l1d_inline(error);
 }

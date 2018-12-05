@@ -190,12 +190,18 @@ static struct bool_flags pr_flag_allow[NBBY * NBPW] = {
 	{"allow.mount", "allow.nomount", PR_ALLOW_MOUNT},
 	{"allow.quotas", "allow.noquotas", PR_ALLOW_QUOTAS},
 	{"allow.socket_af", "allow.nosocket_af", PR_ALLOW_SOCKET_AF},
+	{"allow.mlock", "allow.nomlock", PR_ALLOW_MLOCK},
 	{"allow.reserved_ports", "allow.noreserved_ports",
 	 PR_ALLOW_RESERVED_PORTS},
+	{"allow.read_msgbuf", "allow.noread_msgbuf", PR_ALLOW_READ_MSGBUF},
+	{"allow.unprivileged_proc_debug", "allow.nounprivileged_proc_debug",
+	 PR_ALLOW_UNPRIV_DEBUG},
 };
 const size_t pr_flag_allow_size = sizeof(pr_flag_allow);
 
-#define	JAIL_DEFAULT_ALLOW		(PR_ALLOW_SET_HOSTNAME | PR_ALLOW_RESERVED_PORTS)
+#define	JAIL_DEFAULT_ALLOW		(PR_ALLOW_SET_HOSTNAME | \
+					 PR_ALLOW_RESERVED_PORTS | \
+					 PR_ALLOW_UNPRIV_DEBUG)
 #define	JAIL_DEFAULT_ENFORCE_STATFS	2
 #define	JAIL_DEFAULT_DEVFS_RSNUM	0
 static unsigned jail_default_allow = JAIL_DEFAULT_ALLOW;
@@ -496,6 +502,7 @@ kern_jail_set(struct thread *td, struct uio *optuio, int flags)
 	int ip6s, redo_ip6;
 #endif
 	uint64_t pr_allow, ch_allow, pr_flags, ch_flags;
+	uint64_t pr_allow_diff;
 	unsigned tallow;
 	char numbuf[12];
 
@@ -1392,11 +1399,12 @@ kern_jail_set(struct thread *td, struct uio *optuio, int flags)
 		 * there is a duplicate on a jail with more than one
 		 * IP stop checking and return error.
 		 */
-		tppr = ppr;
 #ifdef VIMAGE
-		for (; tppr != &prison0; tppr = tppr->pr_parent)
+		for (tppr = ppr; tppr != &prison0; tppr = tppr->pr_parent)
 			if (tppr->pr_flags & PR_VNET)
 				break;
+#else
+		tppr = &prison0;
 #endif
 		FOREACH_PRISON_DESCENDANT(tppr, tpr, descend) {
 			if (tpr == pr ||
@@ -1459,11 +1467,12 @@ kern_jail_set(struct thread *td, struct uio *optuio, int flags)
 			}
 		}
 		/* Check for conflicting IP addresses. */
-		tppr = ppr;
 #ifdef VIMAGE
-		for (; tppr != &prison0; tppr = tppr->pr_parent)
+		for (tppr = ppr; tppr != &prison0; tppr = tppr->pr_parent)
 			if (tppr->pr_flags & PR_VNET)
 				break;
+#else
+		tppr = &prison0;
 #endif
 		FOREACH_PRISON_DESCENDANT(tppr, tpr, descend) {
 			if (tpr == pr ||
@@ -1526,7 +1535,8 @@ kern_jail_set(struct thread *td, struct uio *optuio, int flags)
 			}
 		}
 	}
-	if (pr_allow & ~ppr->pr_allow) {
+	pr_allow_diff = pr_allow & ~ppr->pr_allow;
+	if (pr_allow_diff & ~PR_ALLOW_DIFFERENCES) {
 		error = EPERM;
 		goto done_deref_locked;
 	}
@@ -2286,7 +2296,7 @@ prison_remove_one(struct prison *pr)
 	 * Kill all processes unfortunate enough to be attached to this prison.
 	 */
 	sx_slock(&allproc_lock);
-	LIST_FOREACH(p, &allproc, p_list) {
+	FOREACH_PROC_IN_SYSTEM(p) {
 		PROC_LOCK(p);
 		if (p->p_state != PRS_NEW && p->p_ucred &&
 		    p->p_ucred->cr_prison == pr)
@@ -2660,7 +2670,7 @@ prison_hold_locked(struct prison *pr)
 
 	mtx_assert(&pr->pr_mtx, MA_OWNED);
 	KASSERT(pr->pr_ref > 0,
-	    ("Trying to hold dead prison (jid=%d).", pr->pr_id));
+	    ("Trying to hold dead prison %p (jid=%d).", pr, pr->pr_id));
 	pr->pr_ref++;
 }
 
@@ -3058,6 +3068,7 @@ prison_priv_check(struct ucred *cred, int priv)
 	case PRIV_NET_SETIFMETRIC:
 	case PRIV_NET_SETIFPHYS:
 	case PRIV_NET_SETIFMAC:
+	case PRIV_NET_SETLANPCP:
 	case PRIV_NET_ADDMULTI:
 	case PRIV_NET_DELMULTI:
 	case PRIV_NET_HWIOCTL:
@@ -3293,6 +3304,17 @@ prison_priv_check(struct ucred *cred, int priv)
 			return (EPERM);
 
 		/*
+		 * Conditionnaly allow locking (unlocking) physical pages
+		 * in memory.
+		 */
+	case PRIV_VM_MLOCK:
+	case PRIV_VM_MUNLOCK:
+		if (cred->cr_prison->pr_allow & PR_ALLOW_MLOCK)
+			return (0);
+		else
+			return (EPERM);
+
+		/*
 		 * Conditionally allow jailed root to bind reserved ports.
 		 */
 	case PRIV_NETINET_RESERVEDPORT:
@@ -3335,6 +3357,15 @@ prison_priv_check(struct ucred *cred, int priv)
 		 */
 	case PRIV_PROC_SETLOGINCLASS:
 		return (0);
+
+		/*
+		 * Do not allow a process inside a jail to read the kernel
+		 * message buffer unless explicitly permitted.
+		 */
+	case PRIV_MSGBUF:
+		if (cred->cr_prison->pr_allow & PR_ALLOW_READ_MSGBUF)
+			return (0);
+		return (EPERM);
 
 	default:
 		/*
@@ -3540,7 +3571,7 @@ sysctl_jail_vnet(SYSCTL_HANDLER_ARGS)
 
 SYSCTL_PROC(_security_jail, OID_AUTO, vnet,
     CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_MPSAFE, NULL, 0,
-    sysctl_jail_vnet, "I", "Jail owns VNET?");
+    sysctl_jail_vnet, "I", "Jail owns vnet?");
 
 #if defined(INET) || defined(INET6)
 SYSCTL_UINT(_security_jail, OID_AUTO, jail_max_af_ips, CTLFLAG_RW,
@@ -3752,45 +3783,57 @@ SYSCTL_JAIL_PARAM(_allow, quotas, CTLTYPE_INT | CTLFLAG_RW,
     "B", "Jail may set file quotas");
 SYSCTL_JAIL_PARAM(_allow, socket_af, CTLTYPE_INT | CTLFLAG_RW,
     "B", "Jail may create sockets other than just UNIX/IPv4/IPv6/route");
+SYSCTL_JAIL_PARAM(_allow, mlock, CTLTYPE_INT | CTLFLAG_RW,
+    "B", "Jail may lock (unlock) physical pages in memory");
 SYSCTL_JAIL_PARAM(_allow, reserved_ports, CTLTYPE_INT | CTLFLAG_RW,
     "B", "Jail may bind sockets to reserved ports");
+SYSCTL_JAIL_PARAM(_allow, read_msgbuf, CTLTYPE_INT | CTLFLAG_RW,
+    "B", "Jail may read the kernel message buffer");
+SYSCTL_JAIL_PARAM(_allow, unprivileged_proc_debug, CTLTYPE_INT | CTLFLAG_RW,
+    "B", "Unprivileged processes may use process debugging facilities");
 
 SYSCTL_JAIL_PARAM_SUBNODE(allow, mount, "Jail mount/unmount permission flags");
 SYSCTL_JAIL_PARAM(_allow_mount, , CTLTYPE_INT | CTLFLAG_RW,
     "B", "Jail may mount/unmount jail-friendly file systems in general");
 
 /*
- * The VFS system will register jail-aware filesystems here.  They each get
- * a parameter allow.mount.xxxfs and a flag to check when a jailed user
- * attempts to mount.
+ * Add a dynamic parameter allow.<name>, or allow.<prefix>.<name>.  Return
+ * its associated bit in the pr_allow bitmask, or zero if the parameter was
+ * not created.
  */
-void
-prison_add_vfs(struct vfsconf *vfsp)
+unsigned
+prison_add_allow(const char *prefix, const char *name, const char *prefix_descr,
+    const char *descr)
 {
-	char *allow_name, *allow_noname, *mount_allowed;
 	struct bool_flags *bf;
+	struct sysctl_oid *parent;
+	char *allow_name, *allow_noname, *allowed;
 #ifndef NO_SYSCTL_DESCR
-	char *descr;
+	char *descr_deprecated;
 #endif
 	unsigned allow_flag;
 
-	if (asprintf(&allow_name, M_PRISON, "allow.mount.%s", vfsp->vfc_name) <
-	    0 || asprintf(&allow_noname, M_PRISON, "allow.mount.no%s",
-	    vfsp->vfc_name) < 0) {
+	if (prefix
+	    ? asprintf(&allow_name, M_PRISON, "allow.%s.%s", prefix, name)
+		< 0 ||
+	      asprintf(&allow_noname, M_PRISON, "allow.%s.no%s", prefix, name)
+		< 0
+	    : asprintf(&allow_name, M_PRISON, "allow.%s", name) < 0 ||
+	      asprintf(&allow_noname, M_PRISON, "allow.no%s", name) < 0) {
 		free(allow_name, M_PRISON);
-		return;
+		return 0;
 	}
 
 	/*
-	 * See if this parameter has already beed added, i.e. if the filesystem
-	 * was previously loaded/unloaded.
+	 * See if this parameter has already beed added, i.e. a module was
+	 * previously loaded/unloaded.
 	 */
 	mtx_lock(&prison0.pr_mtx);
 	for (bf = pr_flag_allow;
 	     bf < pr_flag_allow + nitems(pr_flag_allow) && bf->flag != 0;
 	     bf++) {
 		if (strcmp(bf->name, allow_name) == 0) {
-			vfsp->vfc_prison_flag = bf->flag;
+			allow_flag = bf->flag;
 			goto no_add;
 		}
 	}
@@ -3798,11 +3841,17 @@ prison_add_vfs(struct vfsconf *vfsp)
 	/*
 	 * Find a free bit in prison0's pr_allow, failing if there are none
 	 * (which shouldn't happen as long as we keep track of how many
-	 * filesystems are jail-aware).
+	 * potential dynamic flags exist).
+	 *
+	 * Due to per-jail unprivileged process debugging support
+	 * using pr_allow, also verify against PR_ALLOW_ALL_STATIC.
+	 * prison0 may have unprivileged process debugging unset.
 	 */
 	for (allow_flag = 1;; allow_flag <<= 1) {
 		if (allow_flag == 0)
 			goto no_add;
+		if (allow_flag & PR_ALLOW_ALL_STATIC)
+			continue;
 		if ((prison0.pr_allow & allow_flag) == 0)
 			break;
 	}
@@ -3815,52 +3864,73 @@ prison_add_vfs(struct vfsconf *vfsp)
 	for (bf = pr_flag_allow; bf->flag != 0; bf++)
 		if (bf == pr_flag_allow + nitems(pr_flag_allow)) {
 			/* This should never happen, but is not fatal. */
+			allow_flag = 0;
 			goto no_add;
 		}
 	prison0.pr_allow |= allow_flag;
 	bf->name = allow_name;
 	bf->noname = allow_noname;
 	bf->flag = allow_flag;
-	vfsp->vfc_prison_flag = allow_flag;
 	mtx_unlock(&prison0.pr_mtx);
 
 	/*
 	 * Create sysctls for the paramter, and the back-compat global
 	 * permission.
 	 */
-#ifndef NO_SYSCTL_DESCR
-	(void)asprintf(&descr, M_TEMP, "Jail may mount the %s file system",
-	    vfsp->vfc_name);
-#endif
-	(void)SYSCTL_ADD_PROC(NULL,
-	    SYSCTL_CHILDREN(&sysctl___security_jail_param_allow_mount),
-	    OID_AUTO, vfsp->vfc_name, CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_MPSAFE,
+	parent = prefix
+	    ? SYSCTL_ADD_NODE(NULL,
+		  SYSCTL_CHILDREN(&sysctl___security_jail_param_allow),
+		  OID_AUTO, prefix, 0, 0, prefix_descr)
+	    : &sysctl___security_jail_param_allow;
+	(void)SYSCTL_ADD_PROC(NULL, SYSCTL_CHILDREN(parent), OID_AUTO,
+	    name, CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_MPSAFE,
 	    NULL, 0, sysctl_jail_param, "B", descr);
+	if ((prefix
+	     ? asprintf(&allowed, M_TEMP, "%s_%s_allowed", prefix, name)
+	     : asprintf(&allowed, M_TEMP, "%s_allowed", name)) >= 0) {
 #ifndef NO_SYSCTL_DESCR
-	free(descr, M_TEMP);
-#endif
-	if (asprintf(&mount_allowed, M_TEMP, "mount_%s_allowed",
-		vfsp->vfc_name) >= 0) {
-#ifndef NO_SYSCTL_DESCR
-		(void)asprintf(&descr, M_TEMP,
-		  "Processes in jail can mount the %s file system (deprecated)",
-		  vfsp->vfc_name);
+		(void)asprintf(&descr_deprecated, M_TEMP, "%s (deprecated)",
+		    descr);
 #endif
 		(void)SYSCTL_ADD_PROC(NULL,
-		    SYSCTL_CHILDREN(&sysctl___security_jail), OID_AUTO,
-		    mount_allowed, CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_MPSAFE,
-		    NULL, allow_flag, sysctl_jail_default_allow, "I", descr);
+		    SYSCTL_CHILDREN(&sysctl___security_jail), OID_AUTO, allowed,
+		    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_MPSAFE, NULL, allow_flag,
+		    sysctl_jail_default_allow, "I", descr_deprecated);
 #ifndef NO_SYSCTL_DESCR
-		free(descr, M_TEMP);
+		free(descr_deprecated, M_TEMP);
 #endif
-		free(mount_allowed, M_TEMP);
+		free(allowed, M_TEMP);
 	}
-	return;
+	return allow_flag;
 
  no_add:
 	mtx_unlock(&prison0.pr_mtx);
 	free(allow_name, M_PRISON);
 	free(allow_noname, M_PRISON);
+	return allow_flag;
+}
+
+/*
+ * The VFS system will register jail-aware filesystems here.  They each get
+ * a parameter allow.mount.xxxfs and a flag to check when a jailed user
+ * attempts to mount.
+ */
+void
+prison_add_vfs(struct vfsconf *vfsp)
+{
+#ifdef NO_SYSCTL_DESCR
+
+	vfsp->vfc_prison_flag = prison_add_allow("mount", vfsp->vfc_name,
+	    NULL, NULL);
+#else
+	char *descr;
+
+	(void)asprintf(&descr, M_TEMP, "Jail may mount the %s file system",
+	    vfsp->vfc_name);
+	vfsp->vfc_prison_flag = prison_add_allow("mount", vfsp->vfc_name,
+	    NULL, descr);
+	free(descr, M_TEMP);
+#endif
 }
 
 #ifdef RACCT
@@ -3988,8 +4058,10 @@ prison_racct_attach(struct prison *pr)
 static void
 prison_racct_modify(struct prison *pr)
 {
+#ifdef RCTL
 	struct proc *p;
 	struct ucred *cred;
+#endif
 	struct prison_racct *oldprr;
 
 	ASSERT_RACCT_ENABLED();

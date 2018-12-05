@@ -384,6 +384,19 @@ cnungrab()
 	}
 }
 
+void
+cnresume()
+{
+	struct cn_device *cnd;
+	struct consdev *cn;
+
+	STAILQ_FOREACH(cnd, &cn_devlist, cnd_next) {
+		cn = cnd->cnd_cn;
+		if (cn->cn_ops->cn_resume != NULL)
+			cn->cn_ops->cn_resume(cn);
+	}
+}
+
 /*
  * Low level console routines.
  */
@@ -509,9 +522,9 @@ cnputc(int c)
 }
 
 void
-cnputs(char *p)
+cnputsn(const char *p, size_t n)
 {
-	int c;
+	size_t i;
 	int unlock_reqd = 0;
 
 	if (use_cnputs_mtx) {
@@ -526,11 +539,17 @@ cnputs(char *p)
 		unlock_reqd = 1;
 	}
 
-	while ((c = *p++) != '\0')
-		cnputc(c);
+	for (i = 0; i < n; i++)
+		cnputc(p[i]);
 
 	if (unlock_reqd)
 		mtx_unlock_spin(&cnputs_mtx);
+}
+
+void
+cnputs(char *p)
+{
+	cnputsn(p, strlen(p));
 }
 
 static int consmsgbuf_size = 8192;

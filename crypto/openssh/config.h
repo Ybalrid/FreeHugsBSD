@@ -191,7 +191,7 @@
 #define HAVE_ARC4RANDOM_BUF 1
 
 /* Define to 1 if you have the `arc4random_stir' function. */
-#define HAVE_ARC4RANDOM_STIR 1
+/* #undef HAVE_ARC4RANDOM_STIR */
 
 /* Define to 1 if you have the `arc4random_uniform' function. */
 #define HAVE_ARC4RANDOM_UNIFORM 1
@@ -394,6 +394,21 @@
 /* Define if you have /dev/ptc */
 /* #undef HAVE_DEV_PTS_AND_PTC */
 
+/* Define if libcrypto has DH_get0_key */
+#define HAVE_DH_GET0_KEY 1
+
+/* Define if libcrypto has DH_get0_pqg */
+#define HAVE_DH_GET0_PQG 1
+
+/* Define if libcrypto has DH_set0_key */
+#define HAVE_DH_SET0_KEY 1
+
+/* Define if libcrypto has DH_set0_pqg */
+#define HAVE_DH_SET0_PQG 1
+
+/* Define if libcrypto has DH_set_length */
+#define HAVE_DH_SET_LENGTH 1
+
 /* Define to 1 if you have the <dirent.h> header file. */
 #define HAVE_DIRENT_H 1
 
@@ -405,6 +420,30 @@
 
 /* Define to 1 if you have the `DSA_generate_parameters_ex' function. */
 #define HAVE_DSA_GENERATE_PARAMETERS_EX 1
+
+/* Define if libcrypto has DSA_get0_key */
+#define HAVE_DSA_GET0_KEY 1
+
+/* Define if libcrypto has DSA_get0_pqg */
+#define HAVE_DSA_GET0_PQG 1
+
+/* Define if libcrypto has DSA_set0_key */
+#define HAVE_DSA_SET0_KEY 1
+
+/* Define if libcrypto has DSA_set0_pqg */
+#define HAVE_DSA_SET0_PQG 1
+
+/* Define if libcrypto has DSA_SIG_get0 */
+#define HAVE_DSA_SIG_GET0 1
+
+/* Define if libcrypto has DSA_SIG_set0 */
+#define HAVE_DSA_SIG_SET0 1
+
+/* Define if libcrypto has ECDSA_SIG_get0 */
+#define HAVE_ECDSA_SIG_GET0 1
+
+/* Define if libcrypto has ECDSA_SIG_set0 */
+#define HAVE_ECDSA_SIG_SET0 1
 
 /* Define to 1 if you have the <elf.h> header file. */
 #define HAVE_ELF_H 1
@@ -436,6 +475,15 @@
 /* Define if libcrypto has EVP_CIPHER_CTX_ctrl */
 #define HAVE_EVP_CIPHER_CTX_CTRL 1
 
+/* Define if libcrypto has EVP_CIPHER_CTX_set_iv */
+/* #undef HAVE_EVP_CIPHER_CTX_GET_IV */
+
+/* Define if libcrypto has EVP_CIPHER_CTX_iv */
+#define HAVE_EVP_CIPHER_CTX_IV 1
+
+/* Define if libcrypto has EVP_CIPHER_CTX_iv_noconst */
+#define HAVE_EVP_CIPHER_CTX_IV_NOCONST 1
+
 /* Define to 1 if you have the `EVP_DigestFinal_ex' function. */
 #define HAVE_EVP_DIGESTFINAL_EX 1
 
@@ -443,13 +491,22 @@
 #define HAVE_EVP_DIGESTINIT_EX 1
 
 /* Define to 1 if you have the `EVP_MD_CTX_cleanup' function. */
-#define HAVE_EVP_MD_CTX_CLEANUP 1
+/* #undef HAVE_EVP_MD_CTX_CLEANUP */
 
 /* Define to 1 if you have the `EVP_MD_CTX_copy_ex' function. */
 #define HAVE_EVP_MD_CTX_COPY_EX 1
 
+/* Define if libcrypto has EVP_MD_CTX_free */
+#define HAVE_EVP_MD_CTX_FREE 1
+
 /* Define to 1 if you have the `EVP_MD_CTX_init' function. */
-#define HAVE_EVP_MD_CTX_INIT 1
+/* #undef HAVE_EVP_MD_CTX_INIT */
+
+/* Define if libcrypto has EVP_MD_CTX_new */
+#define HAVE_EVP_MD_CTX_NEW 1
+
+/* Define if libcrypto has EVP_PKEY_get0_RSA */
+#define HAVE_EVP_PKEY_GET0_RSA 1
 
 /* Define to 1 if you have the `EVP_ripemd160' function. */
 #define HAVE_EVP_RIPEMD160 1
@@ -535,6 +592,9 @@
 /* Define to 1 if you have the `getlastlogxbyname' function. */
 /* #undef HAVE_GETLASTLOGXBYNAME */
 
+/* Define to 1 if you have the `getline' function. */
+#define HAVE_GETLINE 1
+
 /* Define to 1 if you have the `getluid' function. */
 /* #undef HAVE_GETLUID */
 
@@ -567,6 +627,9 @@
 
 /* Define to 1 if you have the `getpwanam' function. */
 /* #undef HAVE_GETPWANAM */
+
+/* Define to 1 if you have the `getrandom' function. */
+#define HAVE_GETRANDOM 1
 
 /* Define to 1 if you have the `getrlimit' function. */
 #define HAVE_GETRLIMIT 1
@@ -641,7 +704,7 @@
 #define HAVE_HEADER_AD 1
 
 /* Define to 1 if you have the `HMAC_CTX_init' function. */
-#define HAVE_HMAC_CTX_INIT 1
+/* #undef HAVE_HMAC_CTX_INIT */
 
 /* Define if you have ut_host in utmp.h */
 /* #undef HAVE_HOST_IN_UTMP */
@@ -967,8 +1030,47 @@
 /* Define to 1 if you have the `RSA_generate_key_ex' function. */
 #define HAVE_RSA_GENERATE_KEY_EX 1
 
+/* Define if libcrypto has RSA_get0_crt_params */
+#define HAVE_RSA_GET0_CRT_PARAMS 1
+
+/* Define if libcrypto has RSA_get0_factors */
+#define HAVE_RSA_GET0_FACTORS 1
+
+/* Define if libcrypto has RSA_get0_key */
+#define HAVE_RSA_GET0_KEY 1
+
 /* Define to 1 if you have the `RSA_get_default_method' function. */
 #define HAVE_RSA_GET_DEFAULT_METHOD 1
+
+/* Define if libcrypto has RSA_meth_dup */
+#define HAVE_RSA_METH_DUP 1
+
+/* Define if libcrypto has RSA_meth_free */
+#define HAVE_RSA_METH_FREE 1
+
+/* Define if libcrypto has RSA_meth_get_finish */
+#define HAVE_RSA_METH_GET_FINISH 1
+
+/* Define if libcrypto has RSA_meth_set1_name */
+#define HAVE_RSA_METH_SET1_NAME 1
+
+/* Define if libcrypto has RSA_meth_set_finish */
+#define HAVE_RSA_METH_SET_FINISH 1
+
+/* Define if libcrypto has RSA_meth_set_priv_dec */
+#define HAVE_RSA_METH_SET_PRIV_DEC 1
+
+/* Define if libcrypto has RSA_meth_set_priv_enc */
+#define HAVE_RSA_METH_SET_PRIV_ENC 1
+
+/* Define if libcrypto has RSA_get0_srt_params */
+#define HAVE_RSA_SET0_CRT_PARAMS 1
+
+/* Define if libcrypto has RSA_set0_factors */
+#define HAVE_RSA_SET0_FACTORS 1
+
+/* Define if libcrypto has RSA_set0_key */
+#define HAVE_RSA_SET0_KEY 1
 
 /* Define to 1 if you have the <sandbox.h> header file. */
 /* #undef HAVE_SANDBOX_H */
@@ -1288,6 +1390,9 @@
 /* Define to 1 if you have the <sys/ptrace.h> header file. */
 #define HAVE_SYS_PTRACE_H 1
 
+/* Define to 1 if you have the <sys/random.h> header file. */
+#define HAVE_SYS_RANDOM_H 1
+
 /* Define to 1 if you have the <sys/select.h> header file. */
 #define HAVE_SYS_SELECT_H 1
 
@@ -1547,7 +1652,7 @@
 /* Need setpgrp to acquire controlling tty */
 /* #undef NEED_SETPGRP */
 
-/* compiler does not accept __attribute__ on protoype args */
+/* compiler does not accept __attribute__ on prototype args */
 /* #undef NO_ATTRIBUTE_ON_PROTOTYPE_ARGS */
 
 /* compiler does not accept __attribute__ on return types */
@@ -1674,12 +1779,6 @@
 /* The size of `short int', as computed by sizeof. */
 #define SIZEOF_SHORT_INT 2
 
-/* Define if you want S/Key support */
-/* #undef SKEY */
-
-/* Define if your skeychallenge() function takes 4 arguments (NetBSD) */
-/* #undef SKEYCHALLENGE_4ARG */
-
 /* Define as const if snprintf() can declare const char *fmt */
 #define SNPRINTF_CONST const
 
@@ -1780,7 +1879,7 @@
 /* Define if you want to enable AIX4's authenticate function */
 /* #undef WITH_AIXAUTHENTICATE */
 
-/* Define if you have/want arrays (cluster-wide session managment, not C
+/* Define if you have/want arrays (cluster-wide session management, not C
    arrays) */
 /* #undef WITH_IRIX_ARRAY */
 

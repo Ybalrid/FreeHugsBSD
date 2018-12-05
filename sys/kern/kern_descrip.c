@@ -1148,8 +1148,7 @@ fail:
  * This is common code for FIOGETOWN ioctl called by fcntl(fd, F_GETOWN, arg).
  */
 pid_t
-fgetown(sigiop)
-	struct sigio **sigiop;
+fgetown(struct sigio **sigiop)
 {
 	pid_t pgid;
 
@@ -1866,7 +1865,8 @@ falloc_noinstall(struct thread *td, struct file **resultfp)
 		}
 		return (ENFILE);
 	}
-	fp = uma_zalloc(file_zone, M_WAITOK | M_ZERO);
+	fp = uma_zalloc(file_zone, M_WAITOK);
+	bzero(fp, sizeof(*fp));
 	refcount_init(&fp->f_count, 1);
 	fp->f_cred = crhold(td->td_ucred);
 	fp->f_ops = &badfileops;
@@ -2560,7 +2560,7 @@ fget_cap_locked(struct filedesc *fdp, int fd, cap_rights_t *needrightsp,
 	}
 
 #ifdef CAPABILITIES
-	error = cap_check(cap_rights_fde(fde), needrightsp);
+	error = cap_check(cap_rights_fde_inline(fde), needrightsp);
 	if (error != 0)
 		goto out;
 #endif
@@ -2637,7 +2637,7 @@ fget_unlocked(struct filedesc *fdp, int fd, cap_rights_t *needrightsp,
 #endif
 
 	fdt = fdp->fd_files;
-	if ((u_int)fd >= fdt->fdt_nfiles)
+	if (__predict_false((u_int)fd >= fdt->fdt_nfiles))
 		return (EBADF);
 	/*
 	 * Fetch the descriptor locklessly.  We avoid fdrop() races by
@@ -2651,7 +2651,7 @@ fget_unlocked(struct filedesc *fdp, int fd, cap_rights_t *needrightsp,
 #ifdef CAPABILITIES
 		seq = seq_read(fd_seq(fdt, fd));
 		fde = &fdt->fdt_ofiles[fd];
-		haverights = *cap_rights_fde(fde);
+		haverights = *cap_rights_fde_inline(fde);
 		fp = fde->fde_file;
 		if (!seq_consistent(fd_seq(fdt, fd), seq))
 			continue;
@@ -2936,8 +2936,11 @@ fgetvp_write(struct thread *td, int fd, cap_rights_t *rightsp,
 
 /*
  * Handle the last reference to a file being closed.
+ *
+ * Without the noinline attribute clang keeps inlining the func thorough this
+ * file when fdrop is used.
  */
-int
+int __noinline
 _fdrop(struct file *fp, struct thread *td)
 {
 	int error;
@@ -3363,10 +3366,10 @@ sysctl_kern_file(SYSCTL_HANDLER_ARGS)
 			if ((fp = fdp->fd_ofiles[n].fde_file) == NULL)
 				continue;
 			xf.xf_fd = n;
-			xf.xf_file = fp;
-			xf.xf_data = fp->f_data;
-			xf.xf_vnode = fp->f_vnode;
-			xf.xf_type = fp->f_type;
+			xf.xf_file = (uintptr_t)fp;
+			xf.xf_data = (uintptr_t)fp->f_data;
+			xf.xf_vnode = (uintptr_t)fp->f_vnode;
+			xf.xf_type = (uintptr_t)fp->f_type;
 			xf.xf_count = fp->f_count;
 			xf.xf_msgcount = 0;
 			xf.xf_offset = foffset_get(fp);

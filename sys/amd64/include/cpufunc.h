@@ -116,6 +116,13 @@ clflushopt(u_long addr)
 }
 
 static __inline void
+clwb(u_long addr)
+{
+
+	__asm __volatile("clwb %0" : : "m" (*(char *)addr));
+}
+
+static __inline void
 clts(void)
 {
 
@@ -383,6 +390,15 @@ rdtsc(void)
 	uint32_t low, high;
 
 	__asm __volatile("rdtsc" : "=a" (low), "=d" (high));
+	return (low | ((uint64_t)high << 32));
+}
+
+static __inline uint64_t
+rdtscp(void)
+{
+	uint32_t low, high;
+
+	__asm __volatile("rdtscp" : "=a" (low), "=d" (high) : : "ecx");
 	return (low | ((uint64_t)high << 32));
 }
 
@@ -719,6 +735,15 @@ static __inline void
 lldt(u_short sel)
 {
 	__asm __volatile("lldt %0" : : "r" (sel));
+}
+
+static __inline u_short
+sldt(void)
+{
+	u_short sel;
+
+	__asm __volatile("sldt %0" : "=r" (sel));
+	return (sel);
 }
 
 static __inline void

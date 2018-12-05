@@ -74,11 +74,8 @@ pass5(void)
 	memset(newcg, 0, (size_t)fs->fs_cgsize);
 	newcg->cg_niblk = fs->fs_ipg;
 	/* check to see if we are to add a cylinder group check hash */
-	if ((ckhashadd & CK_CYLGRP) != 0) {
-		fs->fs_metackhash |= CK_CYLGRP;
+	if ((ckhashadd & CK_CYLGRP) != 0)
 		rewritecg = 1;
-		sbdirty();
-	}
 	if (cvtlevel >= 3) {
 		if (fs->fs_maxcontig < 2 && fs->fs_contigsumsize > 0) {
 			if (preen)
@@ -186,7 +183,7 @@ pass5(void)
 			cg->cg_ckhash = 0;
 			thishash = calculate_crc32c(~0L, cg, fs->fs_cgsize);
 			if (ckhash != thishash)
-				pwarn("CG %d: BAD CHECK-HASH %#x vs %#x",
+				pwarn("CG %d: BAD CHECK-HASH %#x vs %#x\n",
 				    c, ckhash, thishash);
 			cg->cg_ckhash = ckhash;
 		}

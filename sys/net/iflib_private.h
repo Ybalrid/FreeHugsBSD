@@ -34,7 +34,7 @@
 #define	IFC_LEGACY		0x001
 #define	IFC_QFLUSH		0x002
 #define	IFC_MULTISEG		0x004
-#define	IFC_DMAR		0x008
+#define	IFC_SPARE1		0x008
 #define	IFC_SC_ALLOCATED	0x010
 #define	IFC_INIT_DONE		0x020
 #define	IFC_PREFETCH		0x040
@@ -42,6 +42,7 @@
 #define	IFC_DO_WATCHDOG		0x100
 #define	IFC_CHECK_HUNG		0x200
 #define	IFC_PSEUDO		0x400
+#define	IFC_IN_DETACH		0x800
 
 #define IFC_NETMAP_TX_IRQ	0x80000000
 

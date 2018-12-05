@@ -120,9 +120,21 @@ static void  putchar(int ch, void *arg);
 static char *ksprintn(char *nbuf, uintmax_t num, int base, int *len, int upper);
 static void  snprintf_func(int ch, void *arg);
 
-static int msgbufmapped;		/* Set when safe to use msgbuf */
+static bool msgbufmapped;		/* Set when safe to use msgbuf */
 int msgbuftrigger;
 struct msgbuf *msgbufp;
+
+#ifndef BOOT_TAG_SZ
+#define	BOOT_TAG_SZ	32
+#endif
+#ifndef BOOT_TAG
+/* Tag used to mark the start of a boot in dmesg */
+#define	BOOT_TAG	"---<<BOOT>>---"
+#endif
+
+static char current_boot_tag[BOOT_TAG_SZ + 1] = BOOT_TAG;
+SYSCTL_STRING(_kern, OID_AUTO, boot_tag, CTLFLAG_RDTUN | CTLFLAG_NOFETCH,
+    current_boot_tag, 0, "Tag added to dmesg at start of boot");
 
 static int log_console_output = 1;
 SYSCTL_INT(_kern, OID_AUTO, log_console_output, CTLFLAG_RWTUN,
@@ -244,27 +256,6 @@ vtprintf(struct proc *p, int pri, const char *fmt, va_list ap)
 	if (sess != NULL)
 		sess_release(sess);
 	msgbuftrigger = 1;
-}
-
-/*
- * Ttyprintf displays a message on a tty; it should be used only by
- * the tty driver, or anything that knows the underlying tty will not
- * be revoke(2)'d away.  Other callers should use tprintf.
- */
-int
-ttyprintf(struct tty *tp, const char *fmt, ...)
-{
-	va_list ap;
-	struct putchar_arg pca;
-	int retval;
-
-	va_start(ap, fmt);
-	pca.tty = tp;
-	pca.flags = TOTTY;
-	pca.p_bufr = NULL;
-	retval = kvprintf(fmt, putchar, &pca, 10, ap);
-	va_end(ap);
-	return (retval);
 }
 
 static int
@@ -716,6 +707,7 @@ reswitch:	switch (ch = (u_char)*fmt++) {
 				padc = '0';
 				goto reswitch;
 			}
+			/* FALLTHROUGH */
 		case '1': case '2': case '3': case '4':
 		case '5': case '6': case '7': case '8': case '9':
 				for (n = 0;; ++fmt) {
@@ -1021,21 +1013,24 @@ msgbufinit(void *ptr, int size)
 {
 	char *cp;
 	static struct msgbuf *oldp = NULL;
+	bool print_boot_tag;
 
 	size -= sizeof(*msgbufp);
 	cp = (char *)ptr;
+	print_boot_tag = !msgbufmapped;
+	/* Attempt to fetch kern.boot_tag tunable on first mapping */
+	if (!msgbufmapped)
+		TUNABLE_STR_FETCH("kern.boot_tag", current_boot_tag,
+		    sizeof(current_boot_tag));
 	msgbufp = (struct msgbuf *)(cp + size);
 	msgbuf_reinit(msgbufp, cp, size);
 	if (msgbufmapped && oldp != msgbufp)
 		msgbuf_copy(oldp, msgbufp);
-	msgbufmapped = 1;
+	msgbufmapped = true;
+	if (print_boot_tag && *current_boot_tag != '\0')
+		printf("%s\n", current_boot_tag);
 	oldp = msgbufp;
 }
-
-static int unprivileged_read_msgbuf = 1;
-SYSCTL_INT(_security_bsd, OID_AUTO, unprivileged_read_msgbuf,
-    CTLFLAG_RW, &unprivileged_read_msgbuf, 0,
-    "Unprivileged processes may read the kernel message buffer");
 
 /* Sysctls for accessing/clearing the msgbuf */
 static int
@@ -1045,11 +1040,9 @@ sysctl_kern_msgbuf(SYSCTL_HANDLER_ARGS)
 	u_int seq;
 	int error, len;
 
-	if (!unprivileged_read_msgbuf) {
-		error = priv_check(req->td, PRIV_MSGBUF);
-		if (error)
-			return (error);
-	}
+	error = priv_check(req->td, PRIV_MSGBUF);
+	if (error)
+		return (error);
 
 	/* Read the whole buffer, one chunk at a time. */
 	mtx_lock(&msgbuf_lock);

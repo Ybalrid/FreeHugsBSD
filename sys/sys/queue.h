@@ -95,6 +95,7 @@
  * _NEXT			+	+	+	+
  * _PREV			-	+	-	+
  * _LAST			-	-	+	+
+ * _LAST_FAST			-	-	-	+
  * _FOREACH			+	+	+	+
  * _FOREACH_FROM		+	+	+	+
  * _FOREACH_SAFE		+	+	+	+
@@ -154,18 +155,14 @@ struct qm_trace {
 #endif	/* QUEUE_MACRO_DEBUG_TRACE */
 
 #ifdef QUEUE_MACRO_DEBUG_TRASH
+#define	QMD_SAVELINK(name, link)	void **name = (void *)&(link)
 #define	TRASHIT(x)		do {(x) = (void *)-1;} while (0)
 #define	QMD_IS_TRASHED(x)	((x) == (void *)(intptr_t)-1)
 #else	/* !QUEUE_MACRO_DEBUG_TRASH */
+#define	QMD_SAVELINK(name, link)
 #define	TRASHIT(x)
 #define	QMD_IS_TRASHED(x)	0
 #endif	/* QUEUE_MACRO_DEBUG_TRASH */
-
-#if defined(QUEUE_MACRO_DEBUG_TRACE) || defined(QUEUE_MACRO_DEBUG_TRASH)
-#define	QMD_SAVELINK(name, link)	void **name = (void *)&(link)
-#else	/* !QUEUE_MACRO_DEBUG_TRACE && !QUEUE_MACRO_DEBUG_TRASH */
-#define	QMD_SAVELINK(name, link)
-#endif	/* QUEUE_MACRO_DEBUG_TRACE || QUEUE_MACRO_DEBUG_TRASH */
 
 #ifdef __cplusplus
 /*
@@ -816,6 +813,16 @@ struct {								\
 
 #define	TAILQ_LAST(head, headname)					\
 	(*(((struct headname *)((head)->tqh_last))->tqh_last))
+
+/*
+ * The FAST function is fast in that it causes no data access other
+ * then the access to the head. The standard LAST function above
+ * will cause a data access of both the element you want and 
+ * the previous element. FAST is very useful for instances when
+ * you may want to prefetch the last data element.
+ */
+#define	TAILQ_LAST_FAST(head, type, field)			\
+    (TAILQ_EMPTY(head) ? NULL : __containerof((head)->tqh_last, QUEUE_TYPEOF(type), field.tqe_next))
 
 #define	TAILQ_NEXT(elm, field) ((elm)->field.tqe_next)
 

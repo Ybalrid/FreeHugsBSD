@@ -189,8 +189,8 @@ abort_handler(struct trapframe *tf, int type)
 		return (prefetch_abort_handler(tf));
 
 	/* Grab FAR/FSR before enabling interrupts */
-	far = cpu_faultaddress();
-	fsr = cpu_faultstatus();
+	far = cp15_dfar_get();
+	fsr = cp15_dfsr_get();
 #if 0
 	printf("data abort: fault address=%p (from pc=%p lr=%p)\n",
 	       (void*)far, (void*)tf->tf_pc, (void*)tf->tf_svc_lr);
@@ -456,7 +456,7 @@ dab_fatal(struct trapframe *tf, u_int fsr, u_int far, struct thread *td,
 	printf(", pc =%08x\n\n", tf->tf_pc);
 
 #ifdef KDB
-	if (debugger_on_panic) {
+	if (debugger_on_trap) {
 		kdb_why = KDB_WHY_TRAP;
 		handled = kdb_trap(fsr, 0, tf);
 		kdb_why = KDB_WHY_UNSET;

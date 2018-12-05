@@ -99,7 +99,7 @@ static void	lo_clone_destroy(struct ifnet *);
 VNET_DEFINE(struct ifnet *, loif);	/* Used externally */
 
 #ifdef VIMAGE
-static VNET_DEFINE(struct if_clone *, lo_cloner);
+VNET_DEFINE_STATIC(struct if_clone *, lo_cloner);
 #define	V_lo_cloner		VNET(lo_cloner)
 #endif
 
@@ -380,6 +380,7 @@ loioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 	case SIOCSIFADDR:
 		ifp->if_flags |= IFF_UP;
 		ifp->if_drv_flags |= IFF_DRV_RUNNING;
+		if_link_state_change(ifp, LINK_STATE_UP);
 		/*
 		 * Everything else is done at a higher level.
 		 */

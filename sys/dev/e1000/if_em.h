@@ -250,11 +250,6 @@
 #define IGB_LINK_ITR            2000
 #define I210_LINK_DELAY		1000
 
-#define IGB_MAX_SCATTER		40
-#define IGB_VFTA_SIZE		128
-#define IGB_BR_SIZE		4096	/* ring buf size */
-#define IGB_TSO_SIZE		(65535 + sizeof(struct ether_vlan_header))
-#define IGB_TSO_SEG_SIZE	4096	/* Max dma segment size */
 #define IGB_TXPBSIZE		20408
 #define IGB_HDR_BUF		128
 #define IGB_PKTTYPE_MASK	0x0000FFF0
@@ -340,14 +335,17 @@
 
 #define EM_MAX_SCATTER		40
 #define EM_VFTA_SIZE		128
-#define EM_TSO_SIZE		(65535 + sizeof(struct ether_vlan_header))
+#define EM_TSO_SIZE		65535
 #define EM_TSO_SEG_SIZE		4096	/* Max dma segment size */
 #define EM_MSIX_MASK		0x01F00000 /* For 82574 use */
 #define EM_MSIX_LINK		0x01000000 /* For 82574 use */
 #define ETH_ZLEN		60
 #define ETH_ADDR_LEN		6
-#define EM_CSUM_OFFLOAD		7	/* Offload bits in mbuf flag */
-#define IGB_CSUM_OFFLOAD	0x0E0F	/* Offload bits in mbuf flag */
+#define EM_CSUM_OFFLOAD		(CSUM_IP | CSUM_IP_UDP | CSUM_IP_TCP) /* Offload bits in mbuf flag */
+#define IGB_CSUM_OFFLOAD	(CSUM_IP | CSUM_IP_UDP | CSUM_IP_TCP | \
+				 CSUM_IP_SCTP | CSUM_IP6_UDP | CSUM_IP6_TCP | \
+				 CSUM_IP6_SCTP)	/* Offload bits in mbuf flag */
+
 
 #define IGB_PKTTYPE_MASK	0x0000FFF0
 #define IGB_DMCTLX_DCFLUSH_DIS	0x80000000  /* Disable DMA Coalesce Flush */

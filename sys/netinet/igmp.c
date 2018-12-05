@@ -217,11 +217,11 @@ static MALLOC_DEFINE(M_IGMP, "igmp", "igmp state");
  * FUTURE: Stop using IFP_TO_IA/INADDR_ANY, and use source address selection
  * policy to control the address used by IGMP on the link.
  */
-static VNET_DEFINE(int, interface_timers_running);	/* IGMPv3 general
+VNET_DEFINE_STATIC(int, interface_timers_running);	/* IGMPv3 general
 							 * query response */
-static VNET_DEFINE(int, state_change_timers_running);	/* IGMPv3 state-change
+VNET_DEFINE_STATIC(int, state_change_timers_running);	/* IGMPv3 state-change
 							 * retransmit */
-static VNET_DEFINE(int, current_state_timers_running);	/* IGMPv1/v2 host
+VNET_DEFINE_STATIC(int, current_state_timers_running);	/* IGMPv1/v2 host
 							 * report; IGMPv3 g/sg
 							 * query response */
 
@@ -229,25 +229,25 @@ static VNET_DEFINE(int, current_state_timers_running);	/* IGMPv1/v2 host
 #define	V_state_change_timers_running	VNET(state_change_timers_running)
 #define	V_current_state_timers_running	VNET(current_state_timers_running)
 
-static VNET_DEFINE(LIST_HEAD(, igmp_ifsoftc), igi_head) =
+VNET_DEFINE_STATIC(LIST_HEAD(, igmp_ifsoftc), igi_head) =
     LIST_HEAD_INITIALIZER(igi_head);
-static VNET_DEFINE(struct igmpstat, igmpstat) = {
+VNET_DEFINE_STATIC(struct igmpstat, igmpstat) = {
 	.igps_version = IGPS_VERSION_3,
 	.igps_len = sizeof(struct igmpstat),
 };
-static VNET_DEFINE(struct timeval, igmp_gsrdelay) = {10, 0};
+VNET_DEFINE_STATIC(struct timeval, igmp_gsrdelay) = {10, 0};
 
 #define	V_igi_head			VNET(igi_head)
 #define	V_igmpstat			VNET(igmpstat)
 #define	V_igmp_gsrdelay			VNET(igmp_gsrdelay)
 
-static VNET_DEFINE(int, igmp_recvifkludge) = 1;
-static VNET_DEFINE(int, igmp_sendra) = 1;
-static VNET_DEFINE(int, igmp_sendlocal) = 1;
-static VNET_DEFINE(int, igmp_v1enable) = 1;
-static VNET_DEFINE(int, igmp_v2enable) = 1;
-static VNET_DEFINE(int, igmp_legacysupp);
-static VNET_DEFINE(int, igmp_default_version) = IGMP_VERSION_3;
+VNET_DEFINE_STATIC(int, igmp_recvifkludge) = 1;
+VNET_DEFINE_STATIC(int, igmp_sendra) = 1;
+VNET_DEFINE_STATIC(int, igmp_sendlocal) = 1;
+VNET_DEFINE_STATIC(int, igmp_v1enable) = 1;
+VNET_DEFINE_STATIC(int, igmp_v2enable) = 1;
+VNET_DEFINE_STATIC(int, igmp_legacysupp);
+VNET_DEFINE_STATIC(int, igmp_default_version) = IGMP_VERSION_3;
 
 #define	V_igmp_recvifkludge		VNET(igmp_recvifkludge)
 #define	V_igmp_sendra			VNET(igmp_sendra)
@@ -1218,11 +1218,11 @@ igmp_input_v1_report(struct ifnet *ifp, /*const*/ struct ip *ip,
 	 * Replace 0.0.0.0 with the subnet address if told to do so.
 	 */
 	if (V_igmp_recvifkludge && in_nullhost(ip->ip_src)) {
+		NET_EPOCH_ENTER();
 		IFP_TO_IA(ifp, ia, &in_ifa_tracker);
-		if (ia != NULL) {
+		if (ia != NULL)
 			ip->ip_src.s_addr = htonl(ia->ia_subnet);
-			ifa_free(&ia->ia_ifa);
-		}
+		NET_EPOCH_EXIT();
 	}
 
 	CTR3(KTR_IGMPV3, "process v1 report 0x%08x on ifp %p(%s)",
@@ -1315,24 +1315,23 @@ igmp_input_v2_report(struct ifnet *ifp, /*const*/ struct ip *ip,
 	 * leave requires knowing that we are the only member of a
 	 * group.
 	 */
+	NET_EPOCH_ENTER();
 	IFP_TO_IA(ifp, ia, &in_ifa_tracker);
 	if (ia != NULL && in_hosteq(ip->ip_src, IA_SIN(ia)->sin_addr)) {
-		ifa_free(&ia->ia_ifa);
+		NET_EPOCH_EXIT();
 		return (0);
 	}
 
 	IGMPSTAT_INC(igps_rcv_reports);
 
 	if (ifp->if_flags & IFF_LOOPBACK) {
-		if (ia != NULL)
-			ifa_free(&ia->ia_ifa);
+		NET_EPOCH_EXIT();
 		return (0);
 	}
 
 	if (!IN_MULTICAST(ntohl(igmp->igmp_group.s_addr)) ||
 	    !in_hosteq(igmp->igmp_group, ip->ip_dst)) {
-		if (ia != NULL)
-			ifa_free(&ia->ia_ifa);
+		NET_EPOCH_EXIT();
 		IGMPSTAT_INC(igps_rcv_badreports);
 		return (EINVAL);
 	}
@@ -1348,8 +1347,7 @@ igmp_input_v2_report(struct ifnet *ifp, /*const*/ struct ip *ip,
 		if (ia != NULL)
 			ip->ip_src.s_addr = htonl(ia->ia_subnet);
 	}
-	if (ia != NULL)
-		ifa_free(&ia->ia_ifa);
+	NET_EPOCH_EXIT();
 
 	CTR3(KTR_IGMPV3, "process v2 report 0x%08x on ifp %p(%s)",
 	     ntohl(igmp->igmp_group.s_addr), ifp, ifp->if_xname);
@@ -3526,11 +3524,11 @@ igmp_v3_encap_report(struct ifnet *ifp, struct mbuf *m)
 	if (m->m_flags & M_IGMP_LOOP) {
 		struct in_ifaddr *ia;
 
+		NET_EPOCH_ENTER();
 		IFP_TO_IA(ifp, ia, &in_ifa_tracker);
-		if (ia != NULL) {
+		if (ia != NULL)
 			ip->ip_src = ia->ia_addr.sin_addr;
-			ifa_free(&ia->ia_ifa);
-		}
+		NET_EPOCH_EXIT();
 	}
 
 	ip->ip_dst.s_addr = htonl(INADDR_ALLRPTS_GROUP);

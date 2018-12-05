@@ -82,13 +82,13 @@ __FBSDID("$FreeBSD$");
  * routines to turnaround packets back to the originator, and
  * host table maintenance routines.
  */
-static VNET_DEFINE(int, icmplim) = 200;
+VNET_DEFINE_STATIC(int, icmplim) = 200;
 #define	V_icmplim			VNET(icmplim)
 SYSCTL_INT(_net_inet_icmp, ICMPCTL_ICMPLIM, icmplim, CTLFLAG_VNET | CTLFLAG_RW,
 	&VNET_NAME(icmplim), 0,
 	"Maximum number of ICMP responses per second");
 
-static VNET_DEFINE(int, icmplim_output) = 1;
+VNET_DEFINE_STATIC(int, icmplim_output) = 1;
 #define	V_icmplim_output		VNET(icmplim_output)
 SYSCTL_INT(_net_inet_icmp, OID_AUTO, icmplim_output, CTLFLAG_VNET | CTLFLAG_RW,
 	&VNET_NAME(icmplim_output), 0,
@@ -104,13 +104,13 @@ SYSCTL_VNET_PCPUSTAT(_net_inet_icmp, ICMPCTL_STATS, stats, struct icmpstat,
 VNET_PCPUSTAT_SYSUNINIT(icmpstat);
 #endif /* VIMAGE */
 
-static VNET_DEFINE(int, icmpmaskrepl) = 0;
+VNET_DEFINE_STATIC(int, icmpmaskrepl) = 0;
 #define	V_icmpmaskrepl			VNET(icmpmaskrepl)
 SYSCTL_INT(_net_inet_icmp, ICMPCTL_MASKREPL, maskrepl, CTLFLAG_VNET | CTLFLAG_RW,
 	&VNET_NAME(icmpmaskrepl), 0,
 	"Reply to ICMP Address Mask Request packets");
 
-static VNET_DEFINE(u_int, icmpmaskfake) = 0;
+VNET_DEFINE_STATIC(u_int, icmpmaskfake) = 0;
 #define	V_icmpmaskfake			VNET(icmpmaskfake)
 SYSCTL_UINT(_net_inet_icmp, OID_AUTO, maskfake, CTLFLAG_VNET | CTLFLAG_RW,
 	&VNET_NAME(icmpmaskfake), 0,
@@ -122,41 +122,47 @@ SYSCTL_INT(_net_inet_icmp, OID_AUTO, drop_redirect, CTLFLAG_VNET | CTLFLAG_RW,
 	&VNET_NAME(drop_redirect), 0,
 	"Ignore ICMP redirects");
 
-static VNET_DEFINE(int, log_redirect) = 0;
+VNET_DEFINE_STATIC(int, log_redirect) = 0;
 #define	V_log_redirect			VNET(log_redirect)
 SYSCTL_INT(_net_inet_icmp, OID_AUTO, log_redirect, CTLFLAG_VNET | CTLFLAG_RW,
 	&VNET_NAME(log_redirect), 0,
 	"Log ICMP redirects to the console");
 
-static VNET_DEFINE(char, reply_src[IFNAMSIZ]);
+VNET_DEFINE_STATIC(char, reply_src[IFNAMSIZ]);
 #define	V_reply_src			VNET(reply_src)
 SYSCTL_STRING(_net_inet_icmp, OID_AUTO, reply_src, CTLFLAG_VNET | CTLFLAG_RW,
 	&VNET_NAME(reply_src), IFNAMSIZ,
 	"ICMP reply source for non-local packets");
 
-static VNET_DEFINE(int, icmp_rfi) = 0;
+VNET_DEFINE_STATIC(int, icmp_rfi) = 0;
 #define	V_icmp_rfi			VNET(icmp_rfi)
 SYSCTL_INT(_net_inet_icmp, OID_AUTO, reply_from_interface, CTLFLAG_VNET | CTLFLAG_RW,
 	&VNET_NAME(icmp_rfi), 0,
 	"ICMP reply from incoming interface for non-local packets");
-
-static VNET_DEFINE(int, icmp_quotelen) = 8;
+/* Router requirements RFC 1812 section 4.3.2.3 requires 576 - 28. */
+VNET_DEFINE_STATIC(int, icmp_quotelen) = 548;
 #define	V_icmp_quotelen			VNET(icmp_quotelen)
 SYSCTL_INT(_net_inet_icmp, OID_AUTO, quotelen, CTLFLAG_VNET | CTLFLAG_RW,
 	&VNET_NAME(icmp_quotelen), 0,
 	"Number of bytes from original packet to quote in ICMP reply");
 
-static VNET_DEFINE(int, icmpbmcastecho) = 0;
+VNET_DEFINE_STATIC(int, icmpbmcastecho) = 0;
 #define	V_icmpbmcastecho		VNET(icmpbmcastecho)
 SYSCTL_INT(_net_inet_icmp, OID_AUTO, bmcastecho, CTLFLAG_VNET | CTLFLAG_RW,
 	&VNET_NAME(icmpbmcastecho), 0,
 	"Reply to multicast ICMP Echo Request and Timestamp packets");
 
-static VNET_DEFINE(int, icmptstamprepl) = 1;
+VNET_DEFINE_STATIC(int, icmptstamprepl) = 1;
 #define	V_icmptstamprepl		VNET(icmptstamprepl)
 SYSCTL_INT(_net_inet_icmp, OID_AUTO, tstamprepl, CTLFLAG_RW,
 	&VNET_NAME(icmptstamprepl), 0,
 	"Respond to ICMP Timestamp packets");
+
+VNET_DEFINE_STATIC(int, error_keeptags) = 0;
+#define	V_error_keeptags		VNET(error_keeptags)
+SYSCTL_INT(_net_inet_icmp, OID_AUTO, error_keeptags, CTLFLAG_VNET | CTLFLAG_RW,
+	&VNET_NAME(error_keeptags), 0,
+	"ICMP error response keeps copy of mbuf_tags of original packet");
 
 #ifdef ICMPPRINTFS
 int	icmpprintfs = 0;
@@ -258,6 +264,7 @@ icmp_error(struct mbuf *n, int type, int code, uint32_t dest, int mtu)
 		if (n->m_len < oiphlen + tcphlen &&
 		    (n = m_pullup(n, oiphlen + tcphlen)) == NULL)
 			goto freeit;
+		oip = mtod(n, struct ip *);
 		icmpelen = max(tcphlen, min(V_icmp_quotelen,
 		    ntohs(oip->ip_len) - oiphlen));
 	} else if (oip->ip_p == IPPROTO_SCTP) {
@@ -313,7 +320,8 @@ stdreply:	icmpelen = max(8, min(V_icmp_quotelen, ntohs(oip->ip_len) -
 #endif
 	icmplen = min(icmplen, M_TRAILINGSPACE(m) -
 	    sizeof(struct ip) - ICMP_MINLEN);
-	m_align(m, ICMP_MINLEN + icmplen);
+	m_align(m, sizeof(struct ip) + ICMP_MINLEN + icmplen);
+	m->m_data += sizeof(struct ip);
 	m->m_len = ICMP_MINLEN + icmplen;
 
 	/* XXX MRT  make the outgoing packet use the same FIB
@@ -355,6 +363,8 @@ stdreply:	icmpelen = max(8, min(V_icmp_quotelen, ntohs(oip->ip_len) -
 	 * reply should bypass as well.
 	 */
 	m->m_flags |= n->m_flags & M_SKIP_FIREWALL;
+	KASSERT(M_LEADINGSPACE(m) >= sizeof(struct ip),
+	    ("insufficient space for ip header"));
 	m->m_data -= sizeof(struct ip);
 	m->m_len += sizeof(struct ip);
 	m->m_pkthdr.len = m->m_len;
@@ -367,6 +377,10 @@ stdreply:	icmpelen = max(8, min(V_icmp_quotelen, ntohs(oip->ip_len) -
 	nip->ip_p = IPPROTO_ICMP;
 	nip->ip_tos = 0;
 	nip->ip_off = 0;
+
+	if (V_error_keeptags)
+		m_tag_copy_chain(m, n, M_NOWAIT);
+
 	icmp_reflect(m);
 
 freeit:
@@ -406,6 +420,7 @@ icmp_input(struct mbuf **mp, int *offp, int proto)
 		    inet_ntoa_r(ip->ip_dst, dstbuf), icmplen);
 	}
 #endif
+	NET_EPOCH_ENTER();
 	if (icmplen < ICMP_MINLEN) {
 		ICMPSTAT_INC(icps_tooshort);
 		goto freeit;
@@ -413,6 +428,7 @@ icmp_input(struct mbuf **mp, int *offp, int proto)
 	i = hlen + min(icmplen, ICMP_ADVLENMIN);
 	if (m->m_len < i && (m = m_pullup(m, i)) == NULL)  {
 		ICMPSTAT_INC(icps_tooshort);
+		NET_EPOCH_EXIT();
 		return (IPPROTO_DONE);
 	}
 	ip = mtod(m, struct ip *);
@@ -530,6 +546,7 @@ icmp_input(struct mbuf **mp, int *offp, int proto)
 		if (m->m_len < i && (m = m_pullup(m, i)) == NULL) {
 			/* This should actually not happen */
 			ICMPSTAT_INC(icps_tooshort);
+			NET_EPOCH_EXIT();
 			return (IPPROTO_DONE);
 		}
 		ip = mtod(m, struct ip *);
@@ -605,10 +622,8 @@ icmp_input(struct mbuf **mp, int *offp, int proto)
 			    (struct sockaddr *)&icmpdst, m->m_pkthdr.rcvif);
 		if (ia == NULL)
 			break;
-		if (ia->ia_ifp == NULL) {
-			ifa_free(&ia->ia_ifa);
+		if (ia->ia_ifp == NULL) 
 			break;
-		}
 		icp->icmp_type = ICMP_MASKREPLY;
 		if (V_icmpmaskfake == 0)
 			icp->icmp_mask = ia->ia_sockmask.sin_addr.s_addr;
@@ -620,11 +635,11 @@ icmp_input(struct mbuf **mp, int *offp, int proto)
 			else if (ia->ia_ifp->if_flags & IFF_POINTOPOINT)
 			    ip->ip_src = satosin(&ia->ia_dstaddr)->sin_addr;
 		}
-		ifa_free(&ia->ia_ifa);
 reflect:
 		ICMPSTAT_INC(icps_reflect);
 		ICMPSTAT_INC(icps_outhist[icp->icmp_type]);
 		icmp_reflect(m);
+		NET_EPOCH_EXIT();
 		return (IPPROTO_DONE);
 
 	case ICMP_REDIRECT:
@@ -701,11 +716,13 @@ reflect:
 	}
 
 raw:
+	NET_EPOCH_EXIT();
 	*mp = m;
 	rip_input(mp, offp, proto);
 	return (IPPROTO_DONE);
 
 freeit:
+	NET_EPOCH_EXIT();
 	m_freem(m);
 	return (IPPROTO_DONE);
 }
@@ -998,7 +1015,7 @@ struct icmp_rate {
 	const char *descr;
 	struct counter_rate cr;
 };
-static VNET_DEFINE(struct icmp_rate, icmp_rates[BANDLIM_MAX]) = {
+VNET_DEFINE_STATIC(struct icmp_rate, icmp_rates[BANDLIM_MAX]) = {
 	{ "icmp unreach response" },
 	{ "icmp ping response" },
 	{ "icmp tstamp response" },

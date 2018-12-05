@@ -62,9 +62,6 @@
 #include <netpfil/pf/pf.h>
 #include <netpfil/pf/pf_altq.h>
 #include <net/altq/altq.h>
-#ifdef ALTQ3_COMPAT
-#include <net/altq/altq_conf.h>
-#endif
 
 /* machine dependent clock related includes */
 #include <sys/bus.h>
@@ -155,22 +152,6 @@ altq_attach(ifq, type, discipline, enqueue, dequeue, request, clfier, classify)
 		return ENXIO;
 	}
 
-#ifdef ALTQ3_COMPAT
-	/*
-	 * pfaltq can override the existing discipline, but altq3 cannot.
-	 * check these if clfier is not NULL (which implies altq3).
-	 */
-	if (clfier != NULL) {
-		if (ALTQ_IS_ENABLED(ifq)) {
-			IFQ_UNLOCK(ifq);
-			return EBUSY;
-		}
-		if (ALTQ_IS_ATTACHED(ifq)) {
-			IFQ_UNLOCK(ifq);
-			return EEXIST;
-		}
-	}
-#endif
 	ifq->altq_type     = type;
 	ifq->altq_disc     = discipline;
 	ifq->altq_enqueue  = enqueue;
@@ -179,11 +160,6 @@ altq_attach(ifq, type, discipline, enqueue, dequeue, request, clfier, classify)
 	ifq->altq_clfier   = clfier;
 	ifq->altq_classify = classify;
 	ifq->altq_flags &= (ALTQF_CANTCHANGE|ALTQF_ENABLED);
-#ifdef ALTQ3_COMPAT
-#ifdef ALTQ_KLD
-	altq_module_incref(type);
-#endif
-#endif
 	IFQ_UNLOCK(ifq);
 	return 0;
 }
@@ -206,11 +182,6 @@ altq_detach(ifq)
 		IFQ_UNLOCK(ifq);
 		return (0);
 	}
-#ifdef ALTQ3_COMPAT
-#ifdef ALTQ_KLD
-	altq_module_declref(ifq->altq_type);
-#endif
-#endif
 
 	ifq->altq_type     = ALTQT_NONE;
 	ifq->altq_disc     = NULL;
@@ -292,12 +263,12 @@ altq_assert(file, line, failedexpr)
 
 /*
  * internal representation of token bucket parameters
- *	rate:	byte_per_unittime << 32
- *		(((bits_per_sec) / 8) << 32) / machclk_freq
- *	depth:	byte << 32
+ *	rate:	(byte_per_unittime << TBR_SHIFT)  / machclk_freq
+ *		(((bits_per_sec) / 8) << TBR_SHIFT) / machclk_freq
+ *	depth:	byte << TBR_SHIFT
  *
  */
-#define	TBR_SHIFT	32
+#define	TBR_SHIFT	29
 #define	TBR_SCALE(x)	((int64_t)(x) << TBR_SHIFT)
 #define	TBR_UNSCALE(x)	((x) >> TBR_SHIFT)
 
@@ -394,7 +365,20 @@ tbr_set(ifq, profile)
 	if (tbr->tbr_rate > 0)
 		tbr->tbr_filluptime = tbr->tbr_depth / tbr->tbr_rate;
 	else
-		tbr->tbr_filluptime = 0xffffffffffffffffLL;
+		tbr->tbr_filluptime = LLONG_MAX;
+	/*
+	 *  The longest time between tbr_dequeue() calls will be about 1
+	 *  system tick, as the callout that drives it is scheduled once per
+	 *  tick.  The refill-time detection logic in tbr_dequeue() can only
+	 *  properly detect the passage of up to LLONG_MAX machclk ticks.
+	 *  Therefore, in order for this logic to function properly in the
+	 *  extreme case, the maximum value of tbr_filluptime should be
+	 *  LLONG_MAX less one system tick's worth of machclk ticks less
+	 *  some additional slop factor (here one more system tick's worth
+	 *  of machclk ticks).
+	 */
+	if (tbr->tbr_filluptime > (LLONG_MAX - 2 * machclk_per_tick))
+		tbr->tbr_filluptime = LLONG_MAX - 2 * machclk_per_tick;
 	tbr->tbr_token = tbr->tbr_depth;
 	tbr->tbr_last = read_machclk();
 	tbr->tbr_lastop = ALTDQ_REMOVE;
@@ -434,8 +418,8 @@ tbr_timeout(arg)
 	VNET_LIST_RLOCK_NOSLEEP();
 	VNET_FOREACH(vnet_iter) {
 		CURVNET_SET(vnet_iter);
-		for (ifp = TAILQ_FIRST(&V_ifnet); ifp;
-		    ifp = TAILQ_NEXT(ifp, if_link)) {
+		for (ifp = CK_STAILQ_FIRST(&V_ifnet); ifp;
+		    ifp = CK_STAILQ_NEXT(ifp, if_link)) {
 			/* read from if_snd unlocked */
 			if (!TBR_IS_ENABLED(&ifp->if_snd))
 				continue;
@@ -453,29 +437,6 @@ tbr_timeout(arg)
 		CALLOUT_RESET(&tbr_callout, 1, tbr_timeout, (void *)0);
 	else
 		tbr_timer = 0;	/* don't need tbr_timer anymore */
-}
-
-/*
- * get token bucket regulator profile
- */
-int
-tbr_get(ifq, profile)
-	struct ifaltq *ifq;
-	struct tb_profile *profile;
-{
-	struct tb_regulator *tbr;
-
-	IFQ_LOCK(ifq);
-	if ((tbr = ifq->altq_tbr) == NULL) {
-		profile->rate = 0;
-		profile->depth = 0;
-	} else {
-		profile->rate =
-		    (u_int)TBR_UNSCALE(tbr->tbr_rate * 8 * machclk_freq);
-		profile->depth = (u_int)TBR_UNSCALE(tbr->tbr_depth);
-	}
-	IFQ_UNLOCK(ifq);
-	return (0);
 }
 
 /*
@@ -733,34 +694,34 @@ altq_remove_queue(struct pf_altq *a)
  * copyout operations, also it is not yet clear which lock to use.
  */
 int
-altq_getqstats(struct pf_altq *a, void *ubuf, int *nbytes)
+altq_getqstats(struct pf_altq *a, void *ubuf, int *nbytes, int version)
 {
 	int error = 0;
 
 	switch (a->scheduler) {
 #ifdef ALTQ_CBQ
 	case ALTQT_CBQ:
-		error = cbq_getqstats(a, ubuf, nbytes);
+		error = cbq_getqstats(a, ubuf, nbytes, version);
 		break;
 #endif
 #ifdef ALTQ_PRIQ
 	case ALTQT_PRIQ:
-		error = priq_getqstats(a, ubuf, nbytes);
+		error = priq_getqstats(a, ubuf, nbytes, version);
 		break;
 #endif
 #ifdef ALTQ_HFSC
 	case ALTQT_HFSC:
-		error = hfsc_getqstats(a, ubuf, nbytes);
+		error = hfsc_getqstats(a, ubuf, nbytes, version);
 		break;
 #endif
 #ifdef ALTQ_FAIRQ
         case ALTQT_FAIRQ:
-                error = fairq_getqstats(a, ubuf, nbytes);
+                error = fairq_getqstats(a, ubuf, nbytes, version);
                 break;
 #endif
 #ifdef ALTQ_CODEL
 	case ALTQT_CODEL:
-		error = codel_getqstats(a, ubuf, nbytes);
+		error = codel_getqstats(a, ubuf, nbytes, version);
 		break;
 #endif
 	default:

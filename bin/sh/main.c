@@ -105,19 +105,6 @@ main(int argc, char *argv[])
 	initcharset();
 	state = 0;
 	if (setjmp(main_handler.loc)) {
-		switch (exception) {
-		case EXEXEC:
-			exitstatus = exerrno;
-			break;
-
-		case EXERROR:
-			exitstatus = 2;
-			break;
-
-		default:
-			break;
-		}
-
 		if (state == 0 || iflag == 0 || ! rootshell ||
 		    exception == EXEXIT)
 			exitshell(exitstatus);
@@ -294,6 +281,7 @@ static char *
 find_dot_file(char *basename)
 {
 	char *fullname;
+	const char *opt;
 	const char *path = pathval();
 	struct stat statb;
 
@@ -301,7 +289,7 @@ find_dot_file(char *basename)
 	if( strchr(basename, '/'))
 		return basename;
 
-	while ((fullname = padvance(&path, basename)) != NULL) {
+	while ((fullname = padvance(&path, &opt, basename)) != NULL) {
 		if ((stat(fullname, &statb) == 0) && S_ISREG(statb.st_mode)) {
 			/*
 			 * Don't bother freeing here, since it will

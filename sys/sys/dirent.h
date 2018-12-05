@@ -58,7 +58,7 @@ typedef	__off_t		off_t;
  * byte boundary with null bytes.  All names are guaranteed null terminated.
  * The maximum length of a name in a directory is MAXNAMLEN.
  *
- * Explicit padding between the last member of the header (d_namelen) and
+ * Explicit padding between the last member of the header (d_namlen) and
  * d_name avoids ABI padding at the end of dirent on LP64 architectures.
  * There is code depending on d_name being last.
  */
@@ -126,6 +126,19 @@ struct freebsd11_dirent {
 
 #ifdef _KERNEL
 #define	GENERIC_DIRSIZ(dp)	_GENERIC_DIRSIZ(dp)
+
+/*
+ * Ensure that padding bytes are zeroed and that the name is NUL-terminated.
+ */
+static inline void
+dirent_terminate(struct dirent *dp)
+{
+
+	dp->d_pad0 = 0;
+	dp->d_pad1 = 0;
+	memset(dp->d_name + dp->d_namlen, 0,
+	    dp->d_reclen - (__offsetof(struct dirent, d_name) + dp->d_namlen));
+}
 #endif
 
 #endif /* !_SYS_DIRENT_H_ */

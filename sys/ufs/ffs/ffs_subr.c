@@ -45,6 +45,8 @@ __FBSDID("$FreeBSD$");
 #include <ufs/ufs/dinode.h>
 #include <ufs/ffs/fs.h>
 
+uint32_t calculate_crc32c(uint32_t, const void *, size_t);
+uint32_t ffs_calc_sbhash(struct fs *);
 struct malloc_type;
 #define UFS_MALLOC(size, type, flags) malloc(size)
 #define UFS_FREE(ptr, type) free(ptr)
@@ -107,31 +109,35 @@ ffs_blkatoff(struct vnode *vp, off_t offset, char **res, struct buf **bpp)
  * Load up the contents of an inode and copy the appropriate pieces
  * to the incore copy.
  */
-void
+int
 ffs_load_inode(struct buf *bp, struct inode *ip, struct fs *fs, ino_t ino)
 {
+	struct ufs1_dinode *dip1;
+	struct ufs2_dinode *dip2;
 
 	if (I_IS_UFS1(ip)) {
-		*ip->i_din1 =
+		dip1 = ip->i_din1;
+		*dip1 =
 		    *((struct ufs1_dinode *)bp->b_data + ino_to_fsbo(fs, ino));
-		ip->i_mode = ip->i_din1->di_mode;
-		ip->i_nlink = ip->i_din1->di_nlink;
-		ip->i_size = ip->i_din1->di_size;
-		ip->i_flags = ip->i_din1->di_flags;
-		ip->i_gen = ip->i_din1->di_gen;
-		ip->i_uid = ip->i_din1->di_uid;
-		ip->i_gid = ip->i_din1->di_gid;
-	} else {
-		*ip->i_din2 =
-		    *((struct ufs2_dinode *)bp->b_data + ino_to_fsbo(fs, ino));
-		ip->i_mode = ip->i_din2->di_mode;
-		ip->i_nlink = ip->i_din2->di_nlink;
-		ip->i_size = ip->i_din2->di_size;
-		ip->i_flags = ip->i_din2->di_flags;
-		ip->i_gen = ip->i_din2->di_gen;
-		ip->i_uid = ip->i_din2->di_uid;
-		ip->i_gid = ip->i_din2->di_gid;
+		ip->i_mode = dip1->di_mode;
+		ip->i_nlink = dip1->di_nlink;
+		ip->i_size = dip1->di_size;
+		ip->i_flags = dip1->di_flags;
+		ip->i_gen = dip1->di_gen;
+		ip->i_uid = dip1->di_uid;
+		ip->i_gid = dip1->di_gid;
+		return (0);
 	}
+	dip2 = ip->i_din2;
+	*dip2 = *((struct ufs2_dinode *)bp->b_data + ino_to_fsbo(fs, ino));
+	ip->i_mode = dip2->di_mode;
+	ip->i_nlink = dip2->di_nlink;
+	ip->i_size = dip2->di_size;
+	ip->i_flags = dip2->di_flags;
+	ip->i_gen = dip2->di_gen;
+	ip->i_uid = dip2->di_uid;
+	ip->i_gid = dip2->di_gid;
+	return (0);
 }
 #endif /* KERNEL */
 
@@ -252,7 +258,8 @@ readsuper(void *devfd, struct fs **fsp, off_t sblockloc, int isaltsblk,
     int (*readfunc)(void *devfd, off_t loc, void **bufp, int size))
 {
 	struct fs *fs;
-	int error;
+	int error, res;
+	uint32_t ckhash;
 
 	error = (*readfunc)(devfd, sblockloc, (void **)fsp, SBLOCKSIZE);
 	if (error != 0)
@@ -267,7 +274,32 @@ readsuper(void *devfd, struct fs **fsp, off_t sblockloc, int isaltsblk,
 	    fs->fs_ncg >= 1 &&
 	    fs->fs_bsize >= MINBSIZE &&
 	    fs->fs_bsize <= MAXBSIZE &&
-	    fs->fs_bsize >= roundup(sizeof(struct fs), DEV_BSIZE)) {
+	    fs->fs_bsize >= roundup(sizeof(struct fs), DEV_BSIZE) &&
+	    fs->fs_sbsize <= SBLOCKSIZE) {
+		/*
+		 * If the filesystem has been run on a kernel without
+		 * metadata check hashes, disable them.
+		 */
+		if ((fs->fs_flags & FS_METACKHASH) == 0)
+			fs->fs_metackhash = 0;
+		if (fs->fs_ckhash != (ckhash = ffs_calc_sbhash(fs))) {
+#ifdef _KERNEL
+			res = uprintf("Superblock check-hash failed: recorded "
+			    "check-hash 0x%x != computed check-hash 0x%x\n",
+			    fs->fs_ckhash, ckhash);
+#else
+			res = 0;
+#endif
+			/*
+			 * Print check-hash failure if no controlling terminal
+			 * in kernel or always if in user-mode (libufs).
+			 */
+			if (res == 0)
+				printf("Superblock check-hash failed: recorded "
+				    "check-hash 0x%x != computed check-hash "
+				    "0x%x\n", fs->fs_ckhash, ckhash);
+			return (EINVAL);
+		}
 		/* Have to set for old filesystems that predate this field */
 		fs->fs_sblockactualloc = sblockloc;
 		/* Not yet any summary information */
@@ -313,9 +345,46 @@ ffs_sbput(void *devfd, struct fs *fs, off_t loc,
 	}
 	fs->fs_fmod = 0;
 	fs->fs_time = UFS_TIME;
+	fs->fs_ckhash = ffs_calc_sbhash(fs);
 	if ((error = (*writefunc)(devfd, loc, fs, fs->fs_sbsize)) != 0)
 		return (error);
 	return (0);
+}
+
+/*
+ * Calculate the check-hash for a superblock.
+ */
+uint32_t
+ffs_calc_sbhash(struct fs *fs)
+{
+	uint32_t ckhash, save_ckhash;
+
+	/*
+	 * A filesystem that was using a superblock ckhash may be moved
+	 * to an older kernel that does not support ckhashes. The
+	 * older kernel will clear the FS_METACKHASH flag indicating
+	 * that it does not update hashes. When the disk is moved back
+	 * to a kernel capable of ckhashes it disables them on mount:
+	 *
+	 *	if ((fs->fs_flags & FS_METACKHASH) == 0)
+	 *		fs->fs_metackhash = 0;
+	 *
+	 * This leaves (fs->fs_metackhash & CK_SUPERBLOCK) == 0) with an
+	 * old stale value in the fs->fs_ckhash field. Thus the need to
+	 * just accept what is there.
+	 */
+	if ((fs->fs_metackhash & CK_SUPERBLOCK) == 0)
+		return (fs->fs_ckhash);
+
+	save_ckhash = fs->fs_ckhash;
+	fs->fs_ckhash = 0;
+	/*
+	 * If newly read from disk, the caller is responsible for
+	 * verifying that fs->fs_sbsize <= SBLOCKSIZE.
+	 */
+	ckhash = calculate_crc32c(~0L, (void *)fs, fs->fs_sbsize);
+	fs->fs_ckhash = save_ckhash;
+	return (ckhash);
 }
 
 /*
@@ -473,7 +542,8 @@ ffs_clusteracct(struct fs *fs, struct cg *cgp, ufs1_daddr_t blkno, int cnt)
 	int32_t *sump;
 	int32_t *lp;
 	u_char *freemapp, *mapp;
-	int i, start, end, forw, back, map, bit;
+	int i, start, end, forw, back, map;
+	u_int bit;
 
 	if (fs->fs_contigsumsize <= 0)
 		return;
@@ -495,7 +565,7 @@ ffs_clusteracct(struct fs *fs, struct cg *cgp, ufs1_daddr_t blkno, int cnt)
 		end = cgp->cg_nclusterblks;
 	mapp = &freemapp[start / NBBY];
 	map = *mapp++;
-	bit = 1 << (start % NBBY);
+	bit = 1U << (start % NBBY);
 	for (i = start; i < end; i++) {
 		if ((map & bit) == 0)
 			break;
@@ -516,7 +586,7 @@ ffs_clusteracct(struct fs *fs, struct cg *cgp, ufs1_daddr_t blkno, int cnt)
 		end = -1;
 	mapp = &freemapp[start / NBBY];
 	map = *mapp--;
-	bit = 1 << (start % NBBY);
+	bit = 1U << (start % NBBY);
 	for (i = start; i > end; i--) {
 		if ((map & bit) == 0)
 			break;
@@ -524,7 +594,7 @@ ffs_clusteracct(struct fs *fs, struct cg *cgp, ufs1_daddr_t blkno, int cnt)
 			bit >>= 1;
 		} else {
 			map = *mapp--;
-			bit = 1 << (NBBY - 1);
+			bit = 1U << (NBBY - 1);
 		}
 	}
 	back = start - i;

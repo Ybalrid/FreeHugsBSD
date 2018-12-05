@@ -24,6 +24,7 @@ SUBDIR_BOOTSTRAP= \
 
 SUBDIR=	${SUBDIR_BOOTSTRAP} \
 	.WAIT \
+	geom \
 	libalias \
 	libarchive \
 	libauditd \
@@ -41,7 +42,7 @@ SUBDIR=	${SUBDIR_BOOTSTRAP} \
 	libdevctl \
 	libdevinfo \
 	libdevstat \
-	${_libdl} \
+	libdl \
 	libdwarf \
 	libedit \
 	libelftc \
@@ -100,6 +101,7 @@ SUBDIR=	${SUBDIR_BOOTSTRAP} \
 # Inter-library dependencies.  When the makefile for a library contains LDADD
 # libraries, those libraries should be listed as build order dependencies here.
 
+SUBDIR_DEPEND_geom=	libufs
 SUBDIR_DEPEND_libarchive= libz libbz2 libexpat liblzma libmd
 SUBDIR_DEPEND_libauditdm= libbsm
 SUBDIR_DEPEND_libbsnmp= ${_libnetgraph}
@@ -124,6 +126,9 @@ SUBDIR_DEPEND_libtacplus= libmd
 SUBDIR_DEPEND_libulog= libmd
 SUBDIR_DEPEND_libunbound= ${_libldns}
 SUBDIR_DEPEND_liblzma= ${_libthr}
+.if ${MK_OFED} != "no"
+SUBDIR_DEPEND_libpcap= ofed
+.endif
 
 # NB: keep these sorted by MK_* knobs
 
@@ -152,8 +157,7 @@ SUBDIR.${MK_LDNS}+=	libldns
 # built for certain architectures.
 .if ${MK_CLANG} != "no" && ${COMPILER_TYPE} == "clang" && \
     (${MACHINE_CPUARCH} == "aarch64" || ${MACHINE_CPUARCH} == "amd64" || \
-    (${MACHINE_CPUARCH} == "arm" && ${MACHINE_ARCH} != "armeb") || \
-    (${MACHINE_CPUARCH} == "i386"))
+    ${MACHINE_CPUARCH} == "arm" || ${MACHINE_CPUARCH} == "i386")
 _libclang_rt=	libclang_rt
 .endif
 
@@ -189,10 +193,6 @@ _libproc=	libproc
 _librtld_db=	librtld_db
 .endif
 
-.if defined(LINKER_FEATURES) && ${LINKER_FEATURES:Mfilter}
-_libdl=		libdl
-.endif
-
 SUBDIR.${MK_OPENSSL}+=	libmp
 SUBDIR.${MK_PMC}+=	libpmc libpmcstat
 SUBDIR.${MK_RADIUS_SUPPORT}+=	libradius
@@ -202,6 +202,8 @@ SUBDIR.${MK_TESTS_SUPPORT}+=	atf
 SUBDIR.${MK_TESTS}+=	tests
 SUBDIR.${MK_UNBOUND}+=	libunbound
 SUBDIR.${MK_USB}+=	libusbhid libusb
+SUBDIR.${MK_OFED}+=	ofed
+SUBDIR.${MK_ZFS}+=	libbe
 
 .if !make(install)
 SUBDIR_PARALLEL=

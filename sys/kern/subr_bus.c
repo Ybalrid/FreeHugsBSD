@@ -51,6 +51,7 @@ __FBSDID("$FreeBSD$");
 #include <machine/bus.h>
 #include <sys/random.h>
 #include <sys/rman.h>
+#include <sys/sbuf.h>
 #include <sys/selinfo.h>
 #include <sys/signalvar.h>
 #include <sys/smp.h>
@@ -58,7 +59,6 @@ __FBSDID("$FreeBSD$");
 #include <sys/systm.h>
 #include <sys/uio.h>
 #include <sys/bus.h>
-#include <sys/interrupt.h>
 #include <sys/cpuset.h>
 
 #include <net/vnet.h>
@@ -82,6 +82,8 @@ struct driverlink {
 	kobj_class_t	driver;
 	TAILQ_ENTRY(driverlink) link;	/* list of drivers in devclass */
 	int		pass;
+	int		flags;
+#define DL_DEFERRED_PROBE	1	/* Probe deferred on this */
 	TAILQ_ENTRY(driverlink) passlink;
 };
 
@@ -152,6 +154,7 @@ EVENTHANDLER_LIST_DEFINE(device_detach);
 EVENTHANDLER_LIST_DEFINE(dev_lookup);
 
 static void devctl2_init(void);
+static bool device_frozen;
 
 #define DRIVERNAME(d)	((d)? d->name : "no driver")
 #define DEVCLANAME(d)	((d)? d->name : "no devclass")
@@ -859,27 +862,18 @@ sysctl_devctl_queue(SYSCTL_HANDLER_ARGS)
  * Strings are always terminated with a NUL, but may be truncated if longer
  * than @p len bytes after quotes.
  *
- * @param dst	Buffer to hold the string. Must be at least @p len bytes long
+ * @param sb	sbuf to place the characters into
  * @param src	Original buffer.
- * @param len	Length of buffer pointed to by @dst, including trailing NUL
  */
 void
-devctl_safe_quote(char *dst, const char *src, size_t len)
+devctl_safe_quote_sb(struct sbuf *sb, const char *src)
 {
-	char *walker = dst, *ep = dst + len - 1;
 
-	if (len == 0)
-		return;
-	while (src != NULL && walker < ep)
-	{
-		if (*src == '"' || *src == '\\') {
-			if (ep - walker < 2)
-				break;
-			*walker++ = '\\';
-		}
-		*walker++ = *src++;
+	while (*src != '\0') {
+		if (*src == '"' || *src == '\\')
+			sbuf_putc(sb, '\\');
+		sbuf_putc(sb, *src++);
 	}
-	*walker = '\0';
 }
 
 /* End of /dev/devctl code */
@@ -1177,7 +1171,11 @@ devclass_add_driver(devclass_t dc, driver_t *driver, int pass, devclass_t *dcp)
 	dl->pass = pass;
 	driver_register_pass(dl);
 
-	devclass_driver_added(dc, driver);
+	if (device_frozen) {
+		dl->flags |= DL_DEFERRED_PROBE;
+	} else {
+		devclass_driver_added(dc, driver);
+	}
 	bus_data_generation_update();
 	return (0);
 }
@@ -1217,6 +1215,9 @@ devclass_driver_deleted(devclass_t busclass, devclass_t dc, driver_t *driver)
 	 * Note that since a driver can be in multiple devclasses, we
 	 * should not detach devices which are not children of devices in
 	 * the affected devclass.
+	 *
+	 * If we're frozen, we don't generate NOMATCH events. Mark to
+	 * generate later.
 	 */
 	for (i = 0; i < dc->maxunit; i++) {
 		if (dc->devices[i]) {
@@ -1225,9 +1226,14 @@ devclass_driver_deleted(devclass_t busclass, devclass_t dc, driver_t *driver)
 			    dev->parent->devclass == busclass) {
 				if ((error = device_detach(dev)) != 0)
 					return (error);
-				BUS_PROBE_NOMATCH(dev->parent, dev);
-				devnomatch(dev);
-				dev->flags |= DF_DONENOMATCH;
+				if (device_frozen) {
+					dev->flags &= ~DF_DONENOMATCH;
+					dev->flags |= DF_NEEDNOMATCH;
+				} else {
+					BUS_PROBE_NOMATCH(dev->parent, dev);
+					devnomatch(dev);
+					dev->flags |= DF_DONENOMATCH;
+				}
 			}
 		}
 	}
@@ -2774,6 +2780,16 @@ device_set_devclass_fixed(device_t dev, const char *classname)
 }
 
 /**
+ * @brief Query the device to determine if it's of a fixed devclass
+ * @see device_set_devclass_fixed()
+ */
+bool
+device_is_devclass_fixed(device_t dev)
+{
+	return ((dev->flags & DF_FIXEDCLASS) != 0);
+}
+
+/**
  * @brief Set the driver of a device
  *
  * @retval 0		success
@@ -2919,6 +2935,7 @@ int
 device_attach(device_t dev)
 {
 	uint64_t attachtime;
+	uint16_t attachentropy;
 	int error;
 
 	if (resource_disabled(dev->driver->name, dev->unit)) {
@@ -2944,19 +2961,12 @@ device_attach(device_t dev)
 		dev->state = DS_NOTPRESENT;
 		return (error);
 	}
-	attachtime = get_cyclecount() - attachtime;
-	/*
-	 * 4 bits per device is a reasonable value for desktop and server
-	 * hardware with good get_cyclecount() implementations, but WILL
-	 * need to be adjusted on other platforms.
+	dev->flags |= DF_ATTACHED_ONCE;
+	/* We only need the low bits of this time, but ranges from tens to thousands
+	 * have been seen, so keep 2 bytes' worth.
 	 */
-#define	RANDOM_PROBE_BIT_GUESS	4
-	if (bootverbose)
-		printf("random: harvesting attach, %zu bytes (%d bits) from %s%d\n",
-		    sizeof(attachtime), RANDOM_PROBE_BIT_GUESS,
-		    dev->driver->name, dev->unit);
-	random_harvest_direct(&attachtime, sizeof(attachtime),
-	    RANDOM_PROBE_BIT_GUESS, RANDOM_ATTACH);
+	attachentropy = (uint16_t)(get_cyclecount() - attachtime);
+	random_harvest_direct(&attachentropy, sizeof(attachentropy), RANDOM_ATTACH);
 	device_sysctl_update(dev);
 	if (dev->busy)
 		dev->state = DS_BUSY;
@@ -5264,8 +5274,9 @@ sysctl_devices(SYSCTL_HANDLER_ARGS)
 	u_int			namelen = arg2;
 	int			index;
 	device_t		dev;
-	struct u_device		udev;	/* XXX this is a bit big */
+	struct u_device		*udev;
 	int			error;
+	char			*walker, *ep;
 
 	if (namelen != 2)
 		return (EINVAL);
@@ -5286,24 +5297,45 @@ sysctl_devices(SYSCTL_HANDLER_ARGS)
 		return (ENOENT);
 
 	/*
-	 * Populate the return array.
+	 * Populate the return item, careful not to overflow the buffer.
 	 */
-	bzero(&udev, sizeof(udev));
-	udev.dv_handle = (uintptr_t)dev;
-	udev.dv_parent = (uintptr_t)dev->parent;
-	if (dev->nameunit != NULL)
-		strlcpy(udev.dv_name, dev->nameunit, sizeof(udev.dv_name));
-	if (dev->desc != NULL)
-		strlcpy(udev.dv_desc, dev->desc, sizeof(udev.dv_desc));
-	if (dev->driver != NULL && dev->driver->name != NULL)
-		strlcpy(udev.dv_drivername, dev->driver->name,
-		    sizeof(udev.dv_drivername));
-	bus_child_pnpinfo_str(dev, udev.dv_pnpinfo, sizeof(udev.dv_pnpinfo));
-	bus_child_location_str(dev, udev.dv_location, sizeof(udev.dv_location));
-	udev.dv_devflags = dev->devflags;
-	udev.dv_flags = dev->flags;
-	udev.dv_state = dev->state;
-	error = SYSCTL_OUT(req, &udev, sizeof(udev));
+	udev = malloc(sizeof(*udev), M_BUS, M_WAITOK | M_ZERO);
+	if (udev == NULL)
+		return (ENOMEM);
+	udev->dv_handle = (uintptr_t)dev;
+	udev->dv_parent = (uintptr_t)dev->parent;
+	udev->dv_devflags = dev->devflags;
+	udev->dv_flags = dev->flags;
+	udev->dv_state = dev->state;
+	walker = udev->dv_fields;
+	ep = walker + sizeof(udev->dv_fields);
+#define CP(src)						\
+	if ((src) == NULL)				\
+		*walker++ = '\0';			\
+	else {						\
+		strlcpy(walker, (src), ep - walker);	\
+		walker += strlen(walker) + 1;		\
+	}						\
+	if (walker >= ep)				\
+		break;
+
+	do {
+		CP(dev->nameunit);
+		CP(dev->desc);
+		CP(dev->driver != NULL ? dev->driver->name : NULL);
+		bus_child_pnpinfo_str(dev, walker, ep - walker);
+		walker += strlen(walker) + 1;
+		if (walker >= ep)
+			break;
+		bus_child_location_str(dev, walker, ep - walker);
+		walker += strlen(walker) + 1;
+		if (walker >= ep)
+			break;
+		*walker++ = '\0';
+	} while (0);
+#undef CP
+	error = SYSCTL_OUT(req, udev, sizeof(*udev));
+	free(udev, M_BUS);
 	return (error);
 }
 
@@ -5393,6 +5425,53 @@ driver_exists(device_t bus, const char *driver)
 	return (false);
 }
 
+static void
+device_gen_nomatch(device_t dev)
+{
+	device_t child;
+
+	if (dev->flags & DF_NEEDNOMATCH &&
+	    dev->state == DS_NOTPRESENT) {
+		BUS_PROBE_NOMATCH(dev->parent, dev);
+		devnomatch(dev);
+		dev->flags |= DF_DONENOMATCH;
+	}
+	dev->flags &= ~DF_NEEDNOMATCH;
+	TAILQ_FOREACH(child, &dev->children, link) {
+		device_gen_nomatch(child);
+	}
+}
+
+static void
+device_do_deferred_actions(void)
+{
+	devclass_t dc;
+	driverlink_t dl;
+
+	/*
+	 * Walk through the devclasses to find all the drivers we've tagged as
+	 * deferred during the freeze and call the driver added routines. They
+	 * have already been added to the lists in the background, so the driver
+	 * added routines that trigger a probe will have all the right bidders
+	 * for the probe auction.
+	 */
+	TAILQ_FOREACH(dc, &devclasses, link) {
+		TAILQ_FOREACH(dl, &dc->drivers, link) {
+			if (dl->flags & DL_DEFERRED_PROBE) {
+				devclass_driver_added(dc, dl->driver);
+				dl->flags &= ~DL_DEFERRED_PROBE;
+			}
+		}
+	}
+
+	/*
+	 * We also defer no-match events during a freeze. Walk the tree and
+	 * generate all the pent-up events that are still relevant.
+	 */
+	device_gen_nomatch(root_bus);
+	bus_data_generation_update();
+}
+
 static int
 devctl2_ioctl(struct cdev *cdev, u_long cmd, caddr_t data, int fflag,
     struct thread *td)
@@ -5418,6 +5497,10 @@ devctl2_ioctl(struct cdev *cdev, u_long cmd, caddr_t data, int fflag,
 		error = priv_check(td, PRIV_DRIVER);
 		if (error == 0)
 			error = find_device(req, &dev);
+		break;
+	case DEV_FREEZE:
+	case DEV_THAW:
+		error = priv_check(td, PRIV_DRIVER);
 		break;
 	default:
 		error = ENOTTY;
@@ -5622,6 +5705,20 @@ devctl2_ioctl(struct cdev *cdev, u_long cmd, caddr_t data, int fflag,
 		error = device_delete_child(parent, dev);
 		break;
 	}
+	case DEV_FREEZE:
+		if (device_frozen)
+			error = EBUSY;
+		else
+			device_frozen = true;
+		break;
+	case DEV_THAW:
+		if (!device_frozen)
+			error = EBUSY;
+		else {
+			device_do_deferred_actions();
+			device_frozen = false;
+		}
+		break;
 	}
 	mtx_unlock(&Giant);
 	return (error);

@@ -116,13 +116,14 @@ static int
 acpi_cmbat_probe(device_t dev)
 {
     static char *cmbat_ids[] = { "PNP0C0A", NULL };
-
-    if (acpi_disabled("cmbat") ||
-	ACPI_ID_PROBE(device_get_parent(dev), dev, cmbat_ids) == NULL)
+    int rv;
+    
+    if (acpi_disabled("cmbat"))
 	return (ENXIO);
-
-    device_set_desc(dev, "ACPI Control Method Battery");
-    return (0);
+    rv = ACPI_ID_PROBE(device_get_parent(dev), dev, cmbat_ids, NULL);
+    if (rv <= 0)
+	device_set_desc(dev, "ACPI Control Method Battery");
+    return (rv);
 }
 
 static int
@@ -229,7 +230,7 @@ acpi_cmbat_info_expired(struct timespec *lastupdated)
 	return (TRUE);
 
     getnanotime(&curtime);
-    timespecsub(&curtime, lastupdated);
+    timespecsub(&curtime, lastupdated, &curtime);
     return (curtime.tv_sec < 0 ||
 	    curtime.tv_sec > acpi_battery_get_info_expire());
 }

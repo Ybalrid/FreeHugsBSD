@@ -51,6 +51,7 @@ __FBSDID("$FreeBSD$");
 #include "opt_kstack_pages.h"
 #include "opt_maxmem.h"
 #include "opt_mp_watchdog.h"
+#include "opt_pci.h"
 #include "opt_platform.h"
 #include "opt_sched.h"
 
@@ -100,6 +101,7 @@ __FBSDID("$FreeBSD$");
 #include <vm/vm_object.h>
 #include <vm/vm_pager.h>
 #include <vm/vm_param.h>
+#include <vm/vm_phys.h>
 
 #ifdef DDB
 #ifndef KDB
@@ -128,6 +130,8 @@ __FBSDID("$FreeBSD$");
 #include <machine/specialreg.h>
 #include <machine/trap.h>
 #include <machine/tss.h>
+#include <x86/ucode.h>
+#include <x86/ifunc.h>
 #ifdef SMP
 #include <machine/smp.h>
 #endif
@@ -184,7 +188,9 @@ struct init_ops init_ops = {
 	.mp_bootaddress =		mp_bootaddress,
 	.start_all_aps =		native_start_all_aps,
 #endif
+#ifdef DEV_PCI
 	.msi_init =			msi_init,
+#endif
 };
 
 /*
@@ -311,6 +317,12 @@ cpu_startup(dummy)
 	printf("avail memory = %ju (%ju MB)\n",
 	    ptoa((uintmax_t)vm_free_count()),
 	    ptoa((uintmax_t)vm_free_count()) / 1048576);
+#ifdef DEV_PCI
+	if (bootverbose && intel_graphics_stolen_base != 0)
+		printf("intel stolen mem: base %#jx size %ju MB\n",
+		    (uintmax_t)intel_graphics_stolen_base,
+		    (uintmax_t)intel_graphics_stolen_size / 1024 / 1024);
+#endif
 
 	/*
 	 * Set up buffers, so they can be used to read disk labels.
@@ -380,7 +392,6 @@ sendsig(sig_t catcher, ksiginfo_t *ksi, sigset_t *mask)
 	sf.sf_uc.uc_mcontext.mc_gsbase = pcb->pcb_gsbase;
 	bzero(sf.sf_uc.uc_mcontext.mc_spare,
 	    sizeof(sf.sf_uc.uc_mcontext.mc_spare));
-	bzero(sf.sf_uc.__spare__, sizeof(sf.sf_uc.__spare__));
 
 	/* Allocate space for the signal handler context. */
 	if ((td->td_pflags & TDP_ALTSTACK) != 0 && !oonstack &&
@@ -1224,6 +1235,12 @@ getmemsize(caddr_t kmdp, u_int64_t first)
 	quad_t dcons_addr, dcons_size;
 	int page_counter;
 
+	/*
+	 * Tell the physical memory allocator about pages used to store
+	 * the kernel and preloaded data.  See kmem_bootstrap_free().
+	 */
+	vm_phys_add_seg((vm_paddr_t)kernphys, trunc_page(first));
+
 	bzero(physmap, sizeof(physmap));
 	physmap_idx = 0;
 
@@ -1246,15 +1263,6 @@ getmemsize(caddr_t kmdp, u_int64_t first)
 		"Memory map doesn't contain a basemem segment, faking it");
 		basemem = 640;
 	}
-
-	/*
-	 * Make hole for "AP -> long mode" bootstrap code.  The
-	 * mp_bootaddress vector is only available when the kernel
-	 * is configured to support APs and APs for the system start
-	 * in real mode mode (e.g. SMP bare metal).
-	 */
-	if (init_ops.mp_bootaddress)
-		init_ops.mp_bootaddress(physmap, &physmap_idx);
 
 	/*
 	 * Maxmem isn't the "maximum memory", it's one larger than the
@@ -1293,6 +1301,15 @@ getmemsize(caddr_t kmdp, u_int64_t first)
 	if (atop(physmap[physmap_idx + 1]) != Maxmem &&
 	    (boothowto & RB_VERBOSE))
 		printf("Physical memory use set to %ldK\n", Maxmem * 4);
+
+	/*
+	 * Make hole for "AP -> long mode" bootstrap code.  The
+	 * mp_bootaddress vector is only available when the kernel
+	 * is configured to support APs and APs for the system start
+	 * in real mode mode (e.g. SMP bare metal).
+	 */
+	if (init_ops.mp_bootaddress)
+		init_ops.mp_bootaddress(physmap, &physmap_idx);
 
 	/* call pmap initialization to make new kernel address space */
 	pmap_bootstrap(&first);
@@ -1538,7 +1555,7 @@ amd64_conf_fast_syscall(void)
 	msr = ((u_int64_t)GSEL(GCODE_SEL, SEL_KPL) << 32) |
 	    ((u_int64_t)GSEL(GUCODE32_SEL, SEL_UPL) << 48);
 	wrmsr(MSR_STAR, msr);
-	wrmsr(MSR_SF_MASK, PSL_NT | PSL_T | PSL_I | PSL_C | PSL_D);
+	wrmsr(MSR_SF_MASK, PSL_NT | PSL_T | PSL_I | PSL_C | PSL_D | PSL_AC);
 }
 
 u_int64_t
@@ -1558,13 +1575,29 @@ hammer_time(u_int64_t modulep, u_int64_t physfree)
 
 	kmdp = init_ops.parse_preload_data(modulep);
 
+	physfree += ucode_load_bsp(physfree + KERNBASE);
+	physfree = roundup2(physfree, PAGE_SIZE);
+
 	identify_cpu1();
 	identify_hypervisor();
-	/*
-	 * hw.cpu_stdext_disable is ignored by the call, it will be
-	 * re-evaluted by the below call to finishidentcpu().
-	 */
+	identify_cpu_fixup_bsp();
 	identify_cpu2();
+	initializecpucache();
+
+	/*
+	 * Check for pti, pcid, and invpcid before ifuncs are
+	 * resolved, to correctly select the implementation for
+	 * pmap_activate_sw_mode().
+	 */
+	pti = pti_get_default();
+	TUNABLE_INT_FETCH("vm.pmap.pti", &pti);
+	TUNABLE_INT_FETCH("vm.pmap.pcid_enabled", &pmap_pcid_enabled);
+	if ((cpu_feature2 & CPUID2_PCID) != 0 && pmap_pcid_enabled) {
+		invpcid_works = (cpu_stdext_feature &
+		    CPUID_STDEXT_INVPCID) != 0;
+	} else {
+		pmap_pcid_enabled = 0;
+	}
 
 	link_elf_ireloc(kmdp);
 
@@ -1630,9 +1663,6 @@ hammer_time(u_int64_t modulep, u_int64_t physfree)
 	mtx_init(&dt_lock, "descriptor tables", NULL, MTX_DEF);
 
 	/* exceptions */
-	pti = pti_get_default();
-	TUNABLE_INT_FETCH("vm.pmap.pti", &pti);
-
 	for (x = 0; x < NIDT; x++)
 		setidt(x, pti ? &IDTVEC(rsvd_pti) : &IDTVEC(rsvd), SDT_SYSIGT,
 		    SEL_KPL, 0);
@@ -1698,9 +1728,13 @@ hammer_time(u_int64_t modulep, u_int64_t physfree)
 	    != NULL)
 		vty_set_preferred(VTY_VT);
 
+	TUNABLE_INT_FETCH("hw.ibrs_disable", &hw_ibrs_disable);
+	TUNABLE_INT_FETCH("hw.spec_store_bypass_disable", &hw_ssb_disable);
+	TUNABLE_INT_FETCH("machdep.syscall_ret_l1d_flush",
+	    &syscall_ret_l1d_flush_mode);
+
 	finishidentcpu();	/* Final stage of CPU initialization */
 	initializecpu();	/* Initialize CPU registers */
-	initializecpucache();
 
 	/* doublefault stack space, runs on ist1 */
 	common_tss[0].tss_ist1 = (long)&dblfault_stack[sizeof(dblfault_stack)];
@@ -1763,6 +1797,11 @@ hammer_time(u_int64_t modulep, u_int64_t physfree)
 	init_param2(physmem);
 
 	/* now running on new page tables, configured,and u/iom is accessible */
+
+#ifdef DEV_PCI
+        /* This call might adjust phys_avail[]. */
+        pci_early_quirks();
+#endif
 
 	if (late_console)
 		cninit();
@@ -1841,9 +1880,6 @@ hammer_time(u_int64_t modulep, u_int64_t physfree)
 	x86_init_fdt();
 #endif
 	thread0.td_critnest = 0;
-
-	TUNABLE_INT_FETCH("hw.ibrs_disable", &hw_ibrs_disable);
-	TUNABLE_INT_FETCH("hw.spec_store_bypass_disable", &hw_ssb_disable);
 
 	TSEXIT();
 
@@ -1978,14 +2014,22 @@ ptrace_set_pc(struct thread *td, unsigned long addr)
 int
 ptrace_single_step(struct thread *td)
 {
-	td->td_frame->tf_rflags |= PSL_T;
+
+	PROC_LOCK_ASSERT(td->td_proc, MA_OWNED);
+	if ((td->td_frame->tf_rflags & PSL_T) == 0) {
+		td->td_frame->tf_rflags |= PSL_T;
+		td->td_dbgflags |= TDB_STEP;
+	}
 	return (0);
 }
 
 int
 ptrace_clear_single_step(struct thread *td)
 {
+
+	PROC_LOCK_ASSERT(td->td_proc, MA_OWNED);
 	td->td_frame->tf_rflags &= ~PSL_T;
+	td->td_dbgflags &= ~TDB_STEP;
 	return (0);
 }
 
@@ -2001,6 +2045,7 @@ fill_regs(struct thread *td, struct reg *regs)
 int
 fill_frame_regs(struct trapframe *tp, struct reg *regs)
 {
+
 	regs->r_r15 = tp->tf_r15;
 	regs->r_r14 = tp->tf_r14;
 	regs->r_r13 = tp->tf_r13;
@@ -2032,6 +2077,8 @@ fill_frame_regs(struct trapframe *tp, struct reg *regs)
 		regs->r_fs = 0;
 		regs->r_gs = 0;
 	}
+	regs->r_err = 0;
+	regs->r_trapno = 0;
 	return (0);
 }
 
@@ -2153,8 +2200,10 @@ int
 set_fpregs(struct thread *td, struct fpreg *fpregs)
 {
 
+	critical_enter();
 	set_fpregs_xmm(fpregs, get_pcb_user_save_td(td));
 	fpuuserinited(td);
+	critical_exit();
 	return (0);
 }
 
@@ -2581,15 +2630,14 @@ set_pcb_flags_raw(struct pcb *pcb, const u_int flags)
  * the PCB_FULL_IRET flag is set.  We disable interrupts to sync with
  * context switches.
  */
-void
-set_pcb_flags(struct pcb *pcb, const u_int flags)
+static void
+set_pcb_flags_fsgsbase(struct pcb *pcb, const u_int flags)
 {
 	register_t r;
 
 	if (curpcb == pcb &&
 	    (flags & PCB_FULL_IRET) != 0 &&
-	    (pcb->pcb_flags & PCB_FULL_IRET) == 0 &&
-	    (cpu_stdext_feature & CPUID_STDEXT_FSGSBASE) != 0) {
+	    (pcb->pcb_flags & PCB_FULL_IRET) == 0) {
 		r = intr_disable();
 		if ((pcb->pcb_flags & PCB_FULL_IRET) == 0) {
 			if (rfs() == _ufssel)
@@ -2602,6 +2650,13 @@ set_pcb_flags(struct pcb *pcb, const u_int flags)
 	} else {
 		set_pcb_flags_raw(pcb, flags);
 	}
+}
+
+DEFINE_IFUNC(, void, set_pcb_flags, (struct pcb *, const u_int), static)
+{
+
+	return ((cpu_stdext_feature & CPUID_STDEXT_FSGSBASE) != 0 ?
+	    set_pcb_flags_fsgsbase : set_pcb_flags_raw);
 }
 
 void
@@ -2637,3 +2692,49 @@ outb_(u_short port, u_char data)
 }
 
 #endif /* KDB */
+
+#undef memset
+#undef memmove
+#undef memcpy
+
+void	*memset_std(void *buf, int c, size_t len);
+void	*memset_erms(void *buf, int c, size_t len);
+DEFINE_IFUNC(, void *, memset, (void *, int, size_t), static)
+{
+
+	return ((cpu_stdext_feature & CPUID_STDEXT_ERMS) != 0 ?
+	    memset_erms : memset_std);
+}
+
+void    *memmove_std(void * _Nonnull dst, const void * _Nonnull src,
+	    size_t len);
+void    *memmove_erms(void * _Nonnull dst, const void * _Nonnull src,
+	    size_t len);
+DEFINE_IFUNC(, void *, memmove, (void * _Nonnull, const void * _Nonnull,
+    size_t), static)
+{
+
+	return ((cpu_stdext_feature & CPUID_STDEXT_ERMS) != 0 ?
+	    memmove_erms : memmove_std);
+}
+
+void    *memcpy_std(void * _Nonnull dst, const void * _Nonnull src,
+	    size_t len);
+void    *memcpy_erms(void * _Nonnull dst, const void * _Nonnull src,
+	    size_t len);
+DEFINE_IFUNC(, void *, memcpy, (void * _Nonnull, const void * _Nonnull,size_t),
+    static)
+{
+
+	return ((cpu_stdext_feature & CPUID_STDEXT_ERMS) != 0 ?
+	    memcpy_erms : memcpy_std);
+}
+
+void	pagezero_std(void *addr);
+void	pagezero_erms(void *addr);
+DEFINE_IFUNC(, void , pagezero, (void *), static)
+{
+
+	return ((cpu_stdext_feature & CPUID_STDEXT_ERMS) != 0 ?
+	    pagezero_erms : pagezero_std);
+}

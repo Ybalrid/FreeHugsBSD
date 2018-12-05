@@ -384,7 +384,7 @@ get_ifid(struct ifnet *ifp0, struct ifnet *altifp,
 
 	/* next, try to get it from some other hardware interface */
 	IFNET_RLOCK_NOSLEEP();
-	TAILQ_FOREACH(ifp, &V_ifnet, if_link) {
+	CK_STAILQ_FOREACH(ifp, &V_ifnet, if_link) {
 		if (ifp == ifp0)
 			continue;
 		if (in6_get_hw_ifid(ifp, in6) != 0)
@@ -481,9 +481,16 @@ in6_ifattach_linklocal(struct ifnet *ifp, struct ifnet *altifp)
 		return (-1);
 	}
 
-	ia = in6ifa_ifpforlinklocal(ifp, 0); /* ia must not be NULL */
-	KASSERT(ia != NULL, ("%s: ia == NULL, ifp=%p", __func__, ifp));
-
+	ia = in6ifa_ifpforlinklocal(ifp, 0);
+	if (ia == NULL) {
+		/*
+		 * Another thread removed the address that we just added.
+		 * This should be rare, but it happens.
+		 */
+		nd6log((LOG_NOTICE, "%s: %s: new link-local address "
+			"disappeared\n", __func__, if_name(ifp)));
+		return (-1);
+	}
 	ifa_free(&ia->ia_ifa);
 
 	/*
@@ -749,7 +756,6 @@ _in6_ifdetach(struct ifnet *ifp, int purgeulp)
 
 	/*
 	 * nuke any of IPv6 addresses we have
-	 * XXX: all addresses should be already removed
 	 */
 	CK_STAILQ_FOREACH_SAFE(ifa, &ifp->if_addrhead, ifa_link, next) {
 		if (ifa->ifa_addr->sa_family != AF_INET6)
@@ -826,7 +832,7 @@ in6_tmpaddrtimer(void *arg)
 	    V_ip6_temp_regen_advance) * hz, in6_tmpaddrtimer, curvnet);
 
 	bzero(nullbuf, sizeof(nullbuf));
-	TAILQ_FOREACH(ifp, &V_ifnet, if_link) {
+	CK_STAILQ_FOREACH(ifp, &V_ifnet, if_link) {
 		if (ifp->if_afdata[AF_INET6] == NULL)
 			continue;
 		ndi = ND_IFINFO(ifp);
@@ -864,6 +870,7 @@ in6_purgemaddrs(struct ifnet *ifp)
 		    ifma->ifma_protospec == NULL)
 			continue;
 		inm = (struct in6_multi *)ifma->ifma_protospec;
+		in6m_disconnect(inm);
 		in6m_rele_locked(&purgeinms, inm);
 		if (__predict_false(ifma6_restart)) {
 			ifma6_restart = false;

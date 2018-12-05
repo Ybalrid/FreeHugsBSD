@@ -34,6 +34,7 @@ __FBSDID("$FreeBSD$");
 #include "ficl.h"
 
 extern unsigned bootprog_rev;
+INTERP_DEFINE("4th");
 
 /* #define BFORTH_DEBUG */
 
@@ -141,9 +142,10 @@ bf_command(FICL_VM *vm)
 	switch (result) {
 	case CMD_CRIT:
 		printf("%s\n", command_errmsg);
+		command_errmsg = NULL;
 		break;
 	case CMD_FATAL:
-		panic("%s\n", command_errmsg);
+		panic("%s", command_errmsg);
 	}
 
 	free(line);

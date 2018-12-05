@@ -199,25 +199,29 @@ choosethread(void)
  * the function call itself, for most cases.
  */
 void
-critical_enter(void)
+critical_enter_KBI(void)
 {
-	struct thread *td;
-
-	td = curthread;
-	td->td_critnest++;
+#ifdef KTR
+	struct thread *td = curthread;
+#endif
+	critical_enter();
 	CTR4(KTR_CRITICAL, "critical_enter by thread %p (%ld, %s) to %d", td,
 	    (long)td->td_proc->p_pid, td->td_name, td->td_critnest);
 }
 
-static void __noinline
+void __noinline
 critical_exit_preempt(void)
 {
 	struct thread *td;
 	int flags;
 
+	/*
+	 * If td_critnest is 0, it is possible that we are going to get
+	 * preempted again before reaching the code below. This happens
+	 * rarely and is harmless. However, this means td_owepreempt may
+	 * now be unset.
+	 */
 	td = curthread;
-	KASSERT(td->td_owepreempt != 0,
-	    ("critical_exit: td_owepreempt == 0"));
 	if (td->td_critnest != 0)
 		return;
 	if (kdb_active)
@@ -241,17 +245,12 @@ critical_exit_preempt(void)
 }
 
 void
-critical_exit(void)
+critical_exit_KBI(void)
 {
-	struct thread *td;
-
-	td = curthread;
-	KASSERT(td->td_critnest != 0,
-	    ("critical_exit: td_critnest == 0"));
-	td->td_critnest--;
-	__compiler_membar();
-	if (__predict_false(td->td_owepreempt))
-		critical_exit_preempt();
+#ifdef KTR
+	struct thread *td = curthread;
+#endif
+	critical_exit();
 	CTR4(KTR_CRITICAL, "critical_exit by thread %p (%ld, %s) to %d", td,
 	    (long)td->td_proc->p_pid, td->td_name, td->td_critnest);
 }

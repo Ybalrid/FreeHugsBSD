@@ -393,7 +393,7 @@ mqnode_free(struct mqfs_node *node)
 static __inline void
 mqnode_addref(struct mqfs_node *node)
 {
-	atomic_fetchadd_int(&node->mn_refcount, 1);
+	atomic_add_int(&node->mn_refcount, 1);
 }
 
 static __inline void
@@ -1428,7 +1428,6 @@ mqfs_readdir(struct vop_readdir_args *ap)
 		entry.d_fileno = pn->mn_fileno;
 		for (i = 0; i < MQFS_NAMELEN - 1 && pn->mn_name[i] != '\0'; ++i)
 			entry.d_name[i] = pn->mn_name[i];
-		entry.d_name[i] = 0;
 		entry.d_namlen = i;
 		switch (pn->mn_type) {
 		case mqfstype_root:
@@ -1447,6 +1446,7 @@ mqfs_readdir(struct vop_readdir_args *ap)
 			panic("%s has unexpected node type: %d", pn->mn_name,
 				pn->mn_type);
 		}
+		dirent_terminate(&entry);
 		if (entry.d_reclen > uio->uio_resid)
                         break;
 		if (offset >= uio->uio_offset) {
@@ -1735,9 +1735,8 @@ mqueue_send(struct mqueue *mq, const char *msg_ptr,
 		goto bad;
 	}
 	for (;;) {
-		ts2 = *abs_timeout;
 		getnanotime(&ts);
-		timespecsub(&ts2, &ts);
+		timespecsub(abs_timeout, &ts, &ts2);
 		if (ts2.tv_sec < 0 || (ts2.tv_sec == 0 && ts2.tv_nsec <= 0)) {
 			error = ETIMEDOUT;
 			break;
@@ -1887,9 +1886,8 @@ mqueue_receive(struct mqueue *mq, char *msg_ptr,
 	}
 
 	for (;;) {
-		ts2 = *abs_timeout;
 		getnanotime(&ts);
-		timespecsub(&ts2, &ts);
+		timespecsub(abs_timeout, &ts, &ts2);
 		if (ts2.tv_sec < 0 || (ts2.tv_sec == 0 && ts2.tv_nsec <= 0)) {
 			error = ETIMEDOUT;
 			return (error);

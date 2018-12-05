@@ -59,7 +59,6 @@ __FBSDID("$FreeBSD$");
 #include <sys/mbuf.h>
 #include <sys/module.h>
 #include <sys/proc.h>
-#include <sys/rwlock.h>
 #include <sys/smp.h>
 #include <sys/socket.h>
 #include <sys/sysctl.h>
@@ -114,11 +113,17 @@ static int		 pf_commit_rules(u_int32_t, int, char *);
 static int		 pf_addr_setup(struct pf_ruleset *,
 			    struct pf_addr_wrap *, sa_family_t);
 static void		 pf_addr_copyout(struct pf_addr_wrap *);
+#ifdef ALTQ
+static int		 pf_export_kaltq(struct pf_altq *,
+			    struct pfioc_altq_v1 *, size_t);
+static int		 pf_import_kaltq(struct pfioc_altq_v1 *,
+			    struct pf_altq *, size_t);
+#endif /* ALTQ */
 
 VNET_DEFINE(struct pf_rule,	pf_default_rule);
 
 #ifdef ALTQ
-static VNET_DEFINE(int,		pf_altq_running);
+VNET_DEFINE_STATIC(int,		pf_altq_running);
 #define	V_pf_altq_running	VNET(pf_altq_running)
 #endif
 
@@ -188,7 +193,7 @@ static struct cdevsw pf_cdevsw = {
 	.d_version =	D_VERSION,
 };
 
-static volatile VNET_DEFINE(int, pf_pfil_hooked);
+volatile VNET_DEFINE_STATIC(int, pf_pfil_hooked);
 #define V_pf_pfil_hooked	VNET(pf_pfil_hooked)
 
 /*
@@ -202,17 +207,19 @@ VNET_DEFINE(int, pf_vnet_active);
 int pf_end_threads;
 struct proc *pf_purge_proc;
 
-struct rwlock			pf_rules_lock;
+struct rmlock			pf_rules_lock;
 struct sx			pf_ioctl_lock;
 struct sx			pf_end_lock;
 
 /* pfsync */
-pfsync_state_import_t 		*pfsync_state_import_ptr = NULL;
-pfsync_insert_state_t		*pfsync_insert_state_ptr = NULL;
-pfsync_update_state_t		*pfsync_update_state_ptr = NULL;
-pfsync_delete_state_t		*pfsync_delete_state_ptr = NULL;
-pfsync_clear_states_t		*pfsync_clear_states_ptr = NULL;
-pfsync_defer_t			*pfsync_defer_ptr = NULL;
+VNET_DEFINE(pfsync_state_import_t *, pfsync_state_import_ptr);
+VNET_DEFINE(pfsync_insert_state_t *, pfsync_insert_state_ptr);
+VNET_DEFINE(pfsync_update_state_t *, pfsync_update_state_ptr);
+VNET_DEFINE(pfsync_delete_state_t *, pfsync_delete_state_ptr);
+VNET_DEFINE(pfsync_clear_states_t *, pfsync_clear_states_ptr);
+VNET_DEFINE(pfsync_defer_t *, pfsync_defer_ptr);
+pfsync_detach_ifnet_t *pfsync_detach_ifnet_ptr;
+
 /* pflog */
 pflog_packet_t			*pflog_packet_ptr = NULL;
 
@@ -991,10 +998,227 @@ pf_addr_copyout(struct pf_addr_wrap *addr)
 	}
 }
 
+#ifdef ALTQ
+/*
+ * Handle export of struct pf_kaltq to user binaries that may be using any
+ * version of struct pf_altq.
+ */
+static int
+pf_export_kaltq(struct pf_altq *q, struct pfioc_altq_v1 *pa, size_t ioc_size)
+{
+	u_int32_t version;
+	
+	if (ioc_size == sizeof(struct pfioc_altq_v0))
+		version = 0;
+	else
+		version = pa->version;
+
+	if (version > PFIOC_ALTQ_VERSION)
+		return (EINVAL);
+
+#define ASSIGN(x) exported_q->x = q->x
+#define COPY(x) \
+	bcopy(&q->x, &exported_q->x, min(sizeof(q->x), sizeof(exported_q->x)))
+#define SATU16(x) (u_int32_t)uqmin((x), USHRT_MAX)
+#define SATU32(x) (u_int32_t)uqmin((x), UINT_MAX)
+
+	switch (version) {
+	case 0: {
+		struct pf_altq_v0 *exported_q =
+		    &((struct pfioc_altq_v0 *)pa)->altq;
+
+		COPY(ifname);
+
+		ASSIGN(scheduler);
+		ASSIGN(tbrsize);
+		exported_q->tbrsize = SATU16(q->tbrsize);
+		exported_q->ifbandwidth = SATU32(q->ifbandwidth);
+
+		COPY(qname);
+		COPY(parent);
+		ASSIGN(parent_qid);
+		exported_q->bandwidth = SATU32(q->bandwidth);
+		ASSIGN(priority);
+		ASSIGN(local_flags);
+
+		ASSIGN(qlimit);
+		ASSIGN(flags);
+
+		if (q->scheduler == ALTQT_HFSC) {
+#define ASSIGN_OPT(x) exported_q->pq_u.hfsc_opts.x = q->pq_u.hfsc_opts.x
+#define ASSIGN_OPT_SATU32(x) exported_q->pq_u.hfsc_opts.x = \
+			    SATU32(q->pq_u.hfsc_opts.x)
+			
+			ASSIGN_OPT_SATU32(rtsc_m1);
+			ASSIGN_OPT(rtsc_d);
+			ASSIGN_OPT_SATU32(rtsc_m2);
+
+			ASSIGN_OPT_SATU32(lssc_m1);
+			ASSIGN_OPT(lssc_d);
+			ASSIGN_OPT_SATU32(lssc_m2);
+
+			ASSIGN_OPT_SATU32(ulsc_m1);
+			ASSIGN_OPT(ulsc_d);
+			ASSIGN_OPT_SATU32(ulsc_m2);
+
+			ASSIGN_OPT(flags);
+			
+#undef ASSIGN_OPT
+#undef ASSIGN_OPT_SATU32
+		} else
+			COPY(pq_u);
+
+		ASSIGN(qid);
+		break;
+	}
+	case 1:	{
+		struct pf_altq_v1 *exported_q =
+		    &((struct pfioc_altq_v1 *)pa)->altq;
+
+		COPY(ifname);
+
+		ASSIGN(scheduler);
+		ASSIGN(tbrsize);
+		ASSIGN(ifbandwidth);
+
+		COPY(qname);
+		COPY(parent);
+		ASSIGN(parent_qid);
+		ASSIGN(bandwidth);
+		ASSIGN(priority);
+		ASSIGN(local_flags);
+
+		ASSIGN(qlimit);
+		ASSIGN(flags);
+		COPY(pq_u);
+
+		ASSIGN(qid);
+		break;
+	}
+	default:
+		panic("%s: unhandled struct pfioc_altq version", __func__);
+		break;
+	}
+
+#undef ASSIGN
+#undef COPY
+#undef SATU16
+#undef SATU32
+
+	return (0);
+}
+
+/*
+ * Handle import to struct pf_kaltq of struct pf_altq from user binaries
+ * that may be using any version of it.
+ */
+static int
+pf_import_kaltq(struct pfioc_altq_v1 *pa, struct pf_altq *q, size_t ioc_size)
+{
+	u_int32_t version;
+	
+	if (ioc_size == sizeof(struct pfioc_altq_v0))
+		version = 0;
+	else
+		version = pa->version;
+
+	if (version > PFIOC_ALTQ_VERSION)
+		return (EINVAL);
+	
+#define ASSIGN(x) q->x = imported_q->x
+#define COPY(x) \
+	bcopy(&imported_q->x, &q->x, min(sizeof(imported_q->x), sizeof(q->x)))
+
+	switch (version) {
+	case 0: {
+		struct pf_altq_v0 *imported_q =
+		    &((struct pfioc_altq_v0 *)pa)->altq;
+
+		COPY(ifname);
+
+		ASSIGN(scheduler);
+		ASSIGN(tbrsize); /* 16-bit -> 32-bit */
+		ASSIGN(ifbandwidth); /* 32-bit -> 64-bit */
+
+		COPY(qname);
+		COPY(parent);
+		ASSIGN(parent_qid);
+		ASSIGN(bandwidth); /* 32-bit -> 64-bit */
+		ASSIGN(priority);
+		ASSIGN(local_flags);
+
+		ASSIGN(qlimit);
+		ASSIGN(flags);
+
+		if (imported_q->scheduler == ALTQT_HFSC) {
+#define ASSIGN_OPT(x) q->pq_u.hfsc_opts.x = imported_q->pq_u.hfsc_opts.x
+
+			/*
+			 * The m1 and m2 parameters are being copied from
+			 * 32-bit to 64-bit.
+			 */
+			ASSIGN_OPT(rtsc_m1);
+			ASSIGN_OPT(rtsc_d);
+			ASSIGN_OPT(rtsc_m2);
+
+			ASSIGN_OPT(lssc_m1);
+			ASSIGN_OPT(lssc_d);
+			ASSIGN_OPT(lssc_m2);
+
+			ASSIGN_OPT(ulsc_m1);
+			ASSIGN_OPT(ulsc_d);
+			ASSIGN_OPT(ulsc_m2);
+
+			ASSIGN_OPT(flags);
+			
+#undef ASSIGN_OPT
+		} else
+			COPY(pq_u);
+
+		ASSIGN(qid);
+		break;
+	}
+	case 1: {
+		struct pf_altq_v1 *imported_q =
+		    &((struct pfioc_altq_v1 *)pa)->altq;
+
+		COPY(ifname);
+
+		ASSIGN(scheduler);
+		ASSIGN(tbrsize);
+		ASSIGN(ifbandwidth);
+
+		COPY(qname);
+		COPY(parent);
+		ASSIGN(parent_qid);
+		ASSIGN(bandwidth);
+		ASSIGN(priority);
+		ASSIGN(local_flags);
+
+		ASSIGN(qlimit);
+		ASSIGN(flags);
+		COPY(pq_u);
+
+		ASSIGN(qid);
+		break;
+	}
+	default:	
+		panic("%s: unhandled struct pfioc_altq version", __func__);
+		break;
+	}
+
+#undef ASSIGN
+#undef COPY
+	
+	return (0);
+}
+#endif /* ALTQ */
+
 static int
 pfioctl(struct cdev *dev, u_long cmd, caddr_t addr, int flags, struct thread *td)
 {
 	int			 error = 0;
+	PF_RULES_RLOCK_TRACKER;
 
 	/* XXX keep in sync with switch() below */
 	if (securelevel_gt(td->td_ucred, 2))
@@ -1013,9 +1237,12 @@ pfioctl(struct cdev *dev, u_long cmd, caddr_t addr, int flags, struct thread *td
 		case DIOCGETTIMEOUT:
 		case DIOCCLRRULECTRS:
 		case DIOCGETLIMIT:
-		case DIOCGETALTQS:
-		case DIOCGETALTQ:
-		case DIOCGETQSTATS:
+		case DIOCGETALTQSV0:
+		case DIOCGETALTQSV1:
+		case DIOCGETALTQV0:
+		case DIOCGETALTQV1:
+		case DIOCGETQSTATSV0:
+		case DIOCGETQSTATSV1:
 		case DIOCGETRULESETS:
 		case DIOCGETRULESET:
 		case DIOCRGETTABLES:
@@ -1033,7 +1260,8 @@ pfioctl(struct cdev *dev, u_long cmd, caddr_t addr, int flags, struct thread *td
 		case DIOCGETSRCNODES:
 		case DIOCCLRSRCNODES:
 		case DIOCIGETIFACES:
-		case DIOCGIFSPEED:
+		case DIOCGIFSPEEDV0:
+		case DIOCGIFSPEEDV1:
 		case DIOCSETIFFLAG:
 		case DIOCCLRIFFLAG:
 			break;
@@ -1059,9 +1287,12 @@ pfioctl(struct cdev *dev, u_long cmd, caddr_t addr, int flags, struct thread *td
 		case DIOCGETSTATES:
 		case DIOCGETTIMEOUT:
 		case DIOCGETLIMIT:
-		case DIOCGETALTQS:
-		case DIOCGETALTQ:
-		case DIOCGETQSTATS:
+		case DIOCGETALTQSV0:
+		case DIOCGETALTQSV1:
+		case DIOCGETALTQV0:
+		case DIOCGETALTQV1:
+		case DIOCGETQSTATSV0:
+		case DIOCGETQSTATSV1:
 		case DIOCGETRULESETS:
 		case DIOCGETRULESET:
 		case DIOCNATLOOK:
@@ -1073,7 +1304,8 @@ pfioctl(struct cdev *dev, u_long cmd, caddr_t addr, int flags, struct thread *td
 		case DIOCOSFPGET:
 		case DIOCGETSRCNODES:
 		case DIOCIGETIFACES:
-		case DIOCGIFSPEED:
+		case DIOCGIFSPEEDV1:
+		case DIOCGIFSPEEDV0:
 			break;
 		case DIOCRCLRTABLES:
 		case DIOCRADDTABLES:
@@ -1643,8 +1875,8 @@ relock_DIOCCLRSTATES:
 			PF_HASHROW_UNLOCK(ih);
 		}
 		psk->psk_killed = killed;
-		if (pfsync_clear_states_ptr != NULL)
-			pfsync_clear_states_ptr(V_pf_status.hostid, psk->psk_ifname);
+		if (V_pfsync_clear_states_ptr != NULL)
+			V_pfsync_clear_states_ptr(V_pf_status.hostid, psk->psk_ifname);
 		break;
 	}
 
@@ -1731,9 +1963,9 @@ relock_DIOCKILLSTATES:
 			error = EINVAL;
 			break;
 		}
-		if (pfsync_state_import_ptr != NULL) {
+		if (V_pfsync_state_import_ptr != NULL) {
 			PF_RULES_RLOCK();
-			error = pfsync_state_import_ptr(sp, PFSYNC_SI_IOCTL);
+			error = V_pfsync_state_import_ptr(sp, PFSYNC_SI_IOCTL);
 			PF_RULES_RUNLOCK();
 		} else
 			error = EOPNOTSUPP;
@@ -2001,18 +2233,22 @@ DIOCGETSTATES_full:
 		break;
 	}
 
-	case DIOCGIFSPEED: {
-		struct pf_ifspeed	*psp = (struct pf_ifspeed *)addr;
-		struct pf_ifspeed	ps;
+	case DIOCGIFSPEEDV0:
+	case DIOCGIFSPEEDV1: {
+		struct pf_ifspeed_v1	*psp = (struct pf_ifspeed_v1 *)addr;
+		struct pf_ifspeed_v1	ps;
 		struct ifnet		*ifp;
 
 		if (psp->ifname[0] != 0) {
 			/* Can we completely trust user-land? */
 			strlcpy(ps.ifname, psp->ifname, IFNAMSIZ);
 			ifp = ifunit(ps.ifname);
-			if (ifp != NULL)
-				psp->baudrate = ifp->if_baudrate;
-			else
+			if (ifp != NULL) {
+				psp->baudrate32 =
+				    (u_int32_t)uqmin(ifp->if_baudrate, UINT_MAX);
+				if (cmd == DIOCGIFSPEEDV1)
+					psp->baudrate = ifp->if_baudrate;
+			} else
 				error = EINVAL;
 		} else
 			error = EINVAL;
@@ -2060,13 +2296,16 @@ DIOCGETSTATES_full:
 		break;
 	}
 
-	case DIOCADDALTQ: {
-		struct pfioc_altq	*pa = (struct pfioc_altq *)addr;
+	case DIOCADDALTQV0:
+	case DIOCADDALTQV1: {
+		struct pfioc_altq_v1	*pa = (struct pfioc_altq_v1 *)addr;
 		struct pf_altq		*altq, *a;
 		struct ifnet		*ifp;
 
-		altq = malloc(sizeof(*altq), M_PFALTQ, M_WAITOK);
-		bcopy(&pa->altq, altq, sizeof(struct pf_altq));
+		altq = malloc(sizeof(*altq), M_PFALTQ, M_WAITOK | M_ZERO);
+		error = pf_import_kaltq(pa, altq, IOCPARM_LEN(cmd));
+		if (error)
+			break;
 		altq->local_flags = 0;
 
 		PF_RULES_WLOCK();
@@ -2110,13 +2349,15 @@ DIOCGETSTATES_full:
 		}
 
 		TAILQ_INSERT_TAIL(V_pf_altqs_inactive, altq, entries);
-		bcopy(altq, &pa->altq, sizeof(struct pf_altq));
+		/* version error check done on import above */
+		pf_export_kaltq(altq, pa, IOCPARM_LEN(cmd));
 		PF_RULES_WUNLOCK();
 		break;
 	}
 
-	case DIOCGETALTQS: {
-		struct pfioc_altq	*pa = (struct pfioc_altq *)addr;
+	case DIOCGETALTQSV0:
+	case DIOCGETALTQSV1: {
+		struct pfioc_altq_v1	*pa = (struct pfioc_altq_v1 *)addr;
 		struct pf_altq		*altq;
 
 		PF_RULES_RLOCK();
@@ -2128,8 +2369,9 @@ DIOCGETSTATES_full:
 		break;
 	}
 
-	case DIOCGETALTQ: {
-		struct pfioc_altq	*pa = (struct pfioc_altq *)addr;
+	case DIOCGETALTQV0:
+	case DIOCGETALTQV1: {
+		struct pfioc_altq_v1	*pa = (struct pfioc_altq_v1 *)addr;
 		struct pf_altq		*altq;
 		u_int32_t		 nr;
 
@@ -2150,21 +2392,24 @@ DIOCGETSTATES_full:
 			error = EBUSY;
 			break;
 		}
-		bcopy(altq, &pa->altq, sizeof(struct pf_altq));
+		pf_export_kaltq(altq, pa, IOCPARM_LEN(cmd));
 		PF_RULES_RUNLOCK();
 		break;
 	}
 
-	case DIOCCHANGEALTQ:
+	case DIOCCHANGEALTQV0:
+	case DIOCCHANGEALTQV1:
 		/* CHANGEALTQ not supported yet! */
 		error = ENODEV;
 		break;
 
-	case DIOCGETQSTATS: {
-		struct pfioc_qstats	*pq = (struct pfioc_qstats *)addr;
+	case DIOCGETQSTATSV0:
+	case DIOCGETQSTATSV1: {
+		struct pfioc_qstats_v1	*pq = (struct pfioc_qstats_v1 *)addr;
 		struct pf_altq		*altq;
 		u_int32_t		 nr;
 		int			 nbytes;
+		u_int32_t		 version;
 
 		PF_RULES_RLOCK();
 		if (pq->ticket != V_ticket_altqs_active) {
@@ -2191,7 +2436,11 @@ DIOCGETSTATES_full:
 			break;
 		}
 		PF_RULES_RUNLOCK();
-		error = altq_getqstats(altq, pq->buf, &nbytes);
+		if (cmd == DIOCGETQSTATSV0)
+			version = 0;  /* DIOCGETQSTATSV0 means stats struct v0 */
+		else
+			version = pq->version;
+		error = altq_getqstats(altq, pq->buf, &nbytes, version);
 		if (error == 0) {
 			pq->scheduler = altq->scheduler;
 			pq->nbytes = nbytes;
@@ -3924,7 +4173,7 @@ pf_load(void)
 {
 	int error;
 
-	rw_init(&pf_rules_lock, "pf rulesets");
+	rm_init(&pf_rules_lock, "pf rulesets");
 	sx_init(&pf_ioctl_lock, "pf ioctl");
 	sx_init(&pf_end_lock, "pf end thread");
 
@@ -3951,7 +4200,6 @@ pf_unload_vnet(void)
 
 	V_pf_vnet_active = 0;
 	V_pf_status.running = 0;
-	swi_remove(V_pf_swi_cookie);
 	error = dehook_pf();
 	if (error) {
 		/*
@@ -3966,6 +4214,8 @@ pf_unload_vnet(void)
 	PF_RULES_WLOCK();
 	shutdown_pf();
 	PF_RULES_WUNLOCK();
+
+	swi_remove(V_pf_swi_cookie);
 
 	pf_unload_vnet_purge();
 
@@ -3997,7 +4247,7 @@ pf_unload(void)
 
 	pfi_cleanup();
 
-	rw_destroy(&pf_rules_lock);
+	rm_destroy(&pf_rules_lock);
 	sx_destroy(&pf_ioctl_lock);
 	sx_destroy(&pf_end_lock);
 }

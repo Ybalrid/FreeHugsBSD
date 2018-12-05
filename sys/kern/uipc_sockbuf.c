@@ -955,23 +955,14 @@ sbappendaddr(struct sockbuf *sb, const struct sockaddr *asa,
 	return (retval);
 }
 
-int
+void
 sbappendcontrol_locked(struct sockbuf *sb, struct mbuf *m0,
     struct mbuf *control)
 {
-	struct mbuf *m, *n, *mlast;
-	int space;
+	struct mbuf *m, *mlast;
 
-	SOCKBUF_LOCK_ASSERT(sb);
-
-	if (control == NULL)
-		panic("sbappendcontrol_locked");
-	space = m_length(control, &n) + m_length(m0, NULL);
-
-	if (space > sbspace(sb))
-		return (0);
 	m_clrprotoflags(m0);
-	n->m_next = m0;			/* concatenate data to control */
+	m_last(control)->m_next = m0;
 
 	SBLASTRECORDCHK(sb);
 
@@ -985,18 +976,15 @@ sbappendcontrol_locked(struct sockbuf *sb, struct mbuf *m0,
 	SBLASTMBUFCHK(sb);
 
 	SBLASTRECORDCHK(sb);
-	return (1);
 }
 
-int
+void
 sbappendcontrol(struct sockbuf *sb, struct mbuf *m0, struct mbuf *control)
 {
-	int retval;
 
 	SOCKBUF_LOCK(sb);
-	retval = sbappendcontrol_locked(sb, m0, control);
+	sbappendcontrol_locked(sb, m0, control);
 	SOCKBUF_UNLOCK(sb);
-	return (retval);
 }
 
 /*
@@ -1236,51 +1224,53 @@ sbdrop(struct sockbuf *sb, int len)
 	m_freem(mfree);
 }
 
-/*
- * Maintain a pointer and offset pair into the socket buffer mbuf chain to
- * avoid traversal of the entire socket buffer for larger offsets.
- */
 struct mbuf *
-sbsndptr(struct sockbuf *sb, u_int off, u_int len, u_int *moff)
+sbsndptr_noadv(struct sockbuf *sb, uint32_t off, uint32_t *moff)
 {
-	struct mbuf *m, *ret;
+	struct mbuf *m;
 
 	KASSERT(sb->sb_mb != NULL, ("%s: sb_mb is NULL", __func__));
-	KASSERT(off + len <= sb->sb_acc, ("%s: beyond sb", __func__));
-	KASSERT(sb->sb_sndptroff <= sb->sb_acc, ("%s: sndptroff broken", __func__));
-
-	/*
-	 * Is off below stored offset? Happens on retransmits.
-	 * Just return, we can't help here.
-	 */
-	if (sb->sb_sndptroff > off) {
+	if (sb->sb_sndptr == NULL || sb->sb_sndptroff > off) {
 		*moff = off;
+		if (sb->sb_sndptr == NULL) {
+			sb->sb_sndptr = sb->sb_mb;
+			sb->sb_sndptroff = 0;
+		}
 		return (sb->sb_mb);
+	} else {
+		m = sb->sb_sndptr;
+		off -= sb->sb_sndptroff;
 	}
+	*moff = off;
+	return (m);
+}
 
-	/* Return closest mbuf in chain for current offset. */
-	*moff = off - sb->sb_sndptroff;
-	m = ret = sb->sb_sndptr ? sb->sb_sndptr : sb->sb_mb;
-	if (*moff == m->m_len) {
-		*moff = 0;
-		sb->sb_sndptroff += m->m_len;
-		m = ret = m->m_next;
-		KASSERT(ret->m_len > 0,
-		    ("mbuf %p in sockbuf %p chain has no valid data", ret, sb));
+void
+sbsndptr_adv(struct sockbuf *sb, struct mbuf *mb, uint32_t len)
+{
+	/*
+	 * A small copy was done, advance forward the sb_sbsndptr to cover
+	 * it.
+	 */
+	struct mbuf *m;
+
+	if (mb != sb->sb_sndptr) {
+		/* Did not copyout at the same mbuf */
+		return;
 	}
-
-	/* Advance by len to be as close as possible for the next transmit. */
-	for (off = off - sb->sb_sndptroff + len - 1;
-	     off > 0 && m != NULL && off >= m->m_len;
-	     m = m->m_next) {
-		sb->sb_sndptroff += m->m_len;
-		off -= m->m_len;
+	m = mb;
+	while (m && (len > 0)) {
+		if (len >= m->m_len) {
+			len -= m->m_len;
+			if (m->m_next) {
+				sb->sb_sndptroff += m->m_len;
+				sb->sb_sndptr = m->m_next;
+			}
+			m = m->m_next;
+		} else {
+			len = 0;
+		}
 	}
-	if (off > 0 && m == NULL)
-		panic("%s: sockbuf %p and mbuf %p clashing", __func__, sb, ret);
-	sb->sb_sndptr = m;
-
-	return (ret);
 }
 
 /*

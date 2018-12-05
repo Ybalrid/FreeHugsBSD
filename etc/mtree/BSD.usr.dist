@@ -25,7 +25,7 @@
         aout
         ..
         clang
-            6.0.0
+            6.0.1
                 include
                     sanitizer
                     ..
@@ -635,6 +635,8 @@
             ..
             fr_FR.UTF-8
             ..
+            ga_IE.UTF-8
+            ..
             he_IL.UTF-8
             ..
             hi_IN.ISCII-DEV
@@ -816,6 +818,8 @@
             man3
             ..
             man4
+                aarch64
+                ..
                 amd64
                 ..
                 arm

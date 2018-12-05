@@ -78,7 +78,7 @@ static int in_difaddr_ioctl(u_long, caddr_t, struct ifnet *, struct thread *);
 static void	in_socktrim(struct sockaddr_in *);
 static void	in_purgemaddrs(struct ifnet *);
 
-static VNET_DEFINE(int, nosameprefix);
+VNET_DEFINE_STATIC(int, nosameprefix);
 #define	V_nosameprefix			VNET(nosameprefix)
 SYSCTL_INT(_net_inet_ip, OID_AUTO, no_same_prefix, CTLFLAG_VNET | CTLFLAG_RW,
 	&VNET_NAME(nosameprefix), 0,
@@ -520,7 +520,12 @@ in_aifaddr_ioctl(u_long cmd, caddr_t data, struct ifnet *ifp, struct thread *td)
 			&ii->ii_allhosts);
 	}
 
-	EVENTHANDLER_INVOKE(ifaddr_event, ifp);
+	/*
+	 * Note: we don't need extra reference for ifa, since we called
+	 * with sx lock held, and ifaddr can not be deleted in concurrent
+	 * thread.
+	 */
+	EVENTHANDLER_INVOKE(ifaddr_event_ext, ifp, ifa, IFADDR_EVENT_ADD);
 
 	return (error);
 
@@ -620,8 +625,7 @@ in_difaddr_ioctl(u_long cmd, caddr_t data, struct ifnet *ifp, struct thread *td)
 	in_ifadown(&ia->ia_ifa, 1);
 
 	if (ia->ia_ifa.ifa_carp)
-		(*carp_detach_p)(&ia->ia_ifa,
-		    (cmd == SIOCDIFADDR) ? false : true);
+		(*carp_detach_p)(&ia->ia_ifa, cmd == SIOCAIFADDR);
 
 	/*
 	 * If this is the last IPv4 address configured on this
@@ -644,7 +648,8 @@ in_difaddr_ioctl(u_long cmd, caddr_t data, struct ifnet *ifp, struct thread *td)
 	}
 	IF_ADDR_WUNLOCK(ifp);
 
-	EVENTHANDLER_INVOKE(ifaddr_event, ifp);
+	EVENTHANDLER_INVOKE(ifaddr_event_ext, ifp, &ia->ia_ifa,
+	    IFADDR_EVENT_DEL);
 	ifa_free(&ia->ia_ifa);		/* in_ifaddrhead */
 
 	return (0);
@@ -912,7 +917,7 @@ in_ifscrub_all(void)
 	struct ifaliasreq ifr;
 
 	IFNET_RLOCK();
-	TAILQ_FOREACH(ifp, &V_ifnet, if_link) {
+	CK_STAILQ_FOREACH(ifp, &V_ifnet, if_link) {
 		/* Cannot lock here - lock recursion. */
 		/* IF_ADDR_RLOCK(ifp); */
 		CK_STAILQ_FOREACH_SAFE(ifa, &ifp->if_addrhead, ifa_link, nifa) {
@@ -1055,9 +1060,11 @@ struct in_llentry {
  * Do actual deallocation of @lle.
  */
 static void
-in_lltable_destroy_lle_unlocked(struct llentry *lle)
+in_lltable_destroy_lle_unlocked(epoch_context_t ctx)
 {
+	struct llentry *lle;
 
+	lle = __containerof(ctx, struct llentry, lle_epoch_ctx);
 	LLE_LOCK_DESTROY(lle);
 	LLE_REQ_DESTROY(lle);
 	free(lle, M_LLTABLE);
@@ -1085,7 +1092,7 @@ in_lltable_destroy_lle(struct llentry *lle)
 {
 
 	LLE_WUNLOCK(lle);
-	in_lltable_destroy_lle_unlocked(lle);
+	epoch_call(net_epoch_preempt,  &lle->lle_epoch_ctx, in_lltable_destroy_lle_unlocked);
 }
 
 static struct llentry *
@@ -1162,10 +1169,6 @@ in_lltable_free_entry(struct lltable *llt, struct llentry *lle)
 		IF_AFDATA_WLOCK_ASSERT(llt->llt_ifp);
 		lltable_unlink_entry(llt, lle);
 	}
-
-	/* cancel timer */
-	if (callout_stop(&lle->lle_timer) > 0)
-		LLE_REMREF(lle);
 
 	/* Drop hold queue */
 	pkts_dropped = llentry_free(lle);
@@ -1294,7 +1297,7 @@ in_lltable_find_dst(struct lltable *llt, struct in_addr dst)
 
 	hashidx = in_lltable_hash_dst(dst, llt->llt_hsize);
 	lleh = &llt->lle_head[hashidx];
-	LIST_FOREACH(lle, lleh, lle_next) {
+	CK_LIST_FOREACH(lle, lleh, lle_next) {
 		if (lle->la_flags & LLE_DELETED)
 			continue;
 		if (lle->r_l3addr.addr4.s_addr == dst.s_addr)
@@ -1350,7 +1353,7 @@ in_lltable_alloc(struct lltable *llt, u_int flags, const struct sockaddr *l3addr
 		linkhdrsize = LLE_MAX_LINKHDR;
 		if (lltable_calc_llheader(ifp, AF_INET, IF_LLADDR(ifp),
 		    linkhdr, &linkhdrsize, &lladdr_off) != 0) {
-			in_lltable_destroy_lle_unlocked(lle);
+			epoch_call(net_epoch_preempt,  &lle->lle_epoch_ctx, in_lltable_destroy_lle_unlocked);
 			return (NULL);
 		}
 		lltable_set_entry_addr(ifp, lle, linkhdr, linkhdrsize,

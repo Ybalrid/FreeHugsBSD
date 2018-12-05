@@ -265,6 +265,8 @@ thread_create(struct thread *td, struct rtprio *rtp,
 #ifdef	HWPMC_HOOKS
 	if (PMC_PROC_IS_USING_PMCS(p))
 		PMC_CALL_HOOK(newtd, PMC_FN_THR_CREATE, NULL);
+	else if (PMC_SYSTEM_SAMPLING_ACTIVE())
+		PMC_CALL_HOOK_UNLOCKED(newtd, PMC_FN_THR_CREATE_LOG, NULL);
 #endif
 
 	tidhash_add(newtd);
@@ -372,6 +374,11 @@ kern_thr_exit(struct thread *td)
 	KASSERT(p->p_numthreads > 1, ("too few threads"));
 	racct_sub(p, RACCT_NTHR, 1);
 	tdsigcleanup(td);
+
+#ifdef AUDIT
+	AUDIT_SYSCALL_EXIT(0, td);
+#endif
+
 	PROC_SLOCK(p);
 	thread_stopped(p);
 	thread_exit();
@@ -592,6 +599,10 @@ sys_thr_set_name(struct thread *td, struct thr_set_name_args *uap)
 	if (ttd == NULL)
 		return (ESRCH);
 	strcpy(ttd->td_name, name);
+#ifdef HWPMC_HOOKS
+	if (PMC_PROC_IS_USING_PMCS(p) || PMC_SYSTEM_SAMPLING_ACTIVE())
+		PMC_CALL_HOOK_UNLOCKED(ttd, PMC_FN_THR_CREATE_LOG, NULL);
+#endif
 #ifdef KTR
 	sched_clear_tdname(ttd);
 #endif

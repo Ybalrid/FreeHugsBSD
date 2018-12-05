@@ -12,10 +12,7 @@ Public domain.
 #define CHACHA_H
 
 #include <sys/types.h>
-
-struct chacha_ctx {
-	u_int input[16];
-};
+#include <crypto/chacha20/_chacha.h>
 
 #define CHACHA_MINKEYLEN 	16
 #define CHACHA_NONCELEN		8
@@ -23,9 +20,15 @@ struct chacha_ctx {
 #define CHACHA_STATELEN		(CHACHA_NONCELEN+CHACHA_CTRLEN)
 #define CHACHA_BLOCKLEN		64
 
-void chacha_keysetup(struct chacha_ctx *x, const u_char *k, u_int kbits);
-void chacha_ivsetup(struct chacha_ctx *x, const u_char *iv, const u_char *ctr);
-void chacha_encrypt_bytes(struct chacha_ctx *x, const u_char *m,
+#ifdef CHACHA_EMBED
+#define LOCAL static
+#else
+#define LOCAL
+#endif
+
+LOCAL void chacha_keysetup(struct chacha_ctx *x, const u_char *k, u_int kbits);
+LOCAL void chacha_ivsetup(struct chacha_ctx *x, const u_char *iv, const u_char *ctr);
+LOCAL void chacha_encrypt_bytes(struct chacha_ctx *x, const u_char *m,
     u_char *c, u_int bytes);
 
 #endif	/* CHACHA_H */

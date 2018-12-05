@@ -61,7 +61,6 @@ static int    nvme_probe(device_t);
 static int    nvme_attach(device_t);
 static int    nvme_detach(device_t);
 static int    nvme_shutdown(device_t);
-static int    nvme_modevent(module_t mod, int type, void *arg);
 
 static devclass_t nvme_devclass;
 
@@ -80,7 +79,7 @@ static driver_t nvme_pci_driver = {
 	sizeof(struct nvme_controller),
 };
 
-DRIVER_MODULE(nvme, pci, nvme_pci_driver, nvme_devclass, nvme_modevent, 0);
+DRIVER_MODULE(nvme, pci, nvme_pci_driver, nvme_devclass, NULL, NULL);
 MODULE_VERSION(nvme, 1);
 MODULE_DEPEND(nvme, cam, 1, 1, 1);
 
@@ -106,6 +105,7 @@ static struct _pcsid
 	{ 0x05401c5f,		0, 0, "Memblaze Pblaze4", QUIRK_DELAY_B4_CHK_RDY },
 	{ 0xa821144d,		0, 0, "Samsung PM1725", QUIRK_DELAY_B4_CHK_RDY },
 	{ 0xa822144d,		0, 0, "Samsung PM1725a", QUIRK_DELAY_B4_CHK_RDY },
+	{ 0x01161179,		0, 0, "Toshiba XG5", QUIRK_DISABLE_TIMEOUT },
 	{ 0x00000000,		0, 0, NULL  }
 };
 
@@ -180,16 +180,6 @@ nvme_uninit(void)
 
 SYSUNINIT(nvme_unregister, SI_SUB_DRIVERS, SI_ORDER_SECOND, nvme_uninit, NULL);
 
-static void
-nvme_load(void)
-{
-}
-
-static void
-nvme_unload(void)
-{
-}
-
 static int
 nvme_shutdown(device_t dev)
 {
@@ -201,35 +191,13 @@ nvme_shutdown(device_t dev)
 	return (0);
 }
 
-static int
-nvme_modevent(module_t mod, int type, void *arg)
-{
-
-	switch (type) {
-	case MOD_LOAD:
-		nvme_load();
-		break;
-	case MOD_UNLOAD:
-		nvme_unload();
-		break;
-	default:
-		break;
-	}
-
-	return (0);
-}
-
 void
 nvme_dump_command(struct nvme_command *cmd)
 {
-	uint8_t opc, fuse;
-
-	opc = (cmd->opc_fuse >> NVME_CMD_OPC_SHIFT) & NVME_CMD_OPC_MASK;
-	fuse = (cmd->opc_fuse >> NVME_CMD_FUSE_SHIFT) & NVME_CMD_FUSE_MASK;
 
 	printf(
 "opc:%x f:%x cid:%x nsid:%x r2:%x r3:%x mptr:%jx prp1:%jx prp2:%jx cdw:%x %x %x %x %x %x\n",
-	    opc, fuse, cmd->cid, le32toh(cmd->nsid),
+	    cmd->opc, cmd->fuse, cmd->cid, le32toh(cmd->nsid),
 	    cmd->rsvd2, cmd->rsvd3,
 	    (uintmax_t)le64toh(cmd->mptr), (uintmax_t)le64toh(cmd->prp1), (uintmax_t)le64toh(cmd->prp2),
 	    le32toh(cmd->cdw10), le32toh(cmd->cdw11), le32toh(cmd->cdw12),
@@ -280,6 +248,25 @@ nvme_attach(device_t dev)
 	if (status != 0) {
 		nvme_ctrlr_destruct(ctrlr, dev);
 		return (status);
+	}
+
+	/*
+	 * Some drives do not implement the completion timeout feature
+	 * correctly. There's a WAR from the manufacturer to just disable it.
+	 * The driver wouldn't respond correctly to a timeout anyway.
+	 */
+	if (ep->quirks & QUIRK_DISABLE_TIMEOUT) {
+		int ptr;
+		uint16_t devctl2;
+
+		status = pci_find_cap(dev, PCIY_EXPRESS, &ptr);
+		if (status) {
+			device_printf(dev, "Can't locate PCIe capability?");
+			return (status);
+		}
+		devctl2 = pci_read_config(dev, ptr + PCIER_DEVICE_CTL2, sizeof(devctl2));
+		devctl2 |= PCIEM_CTL2_COMP_TIMO_DISABLE;
+		pci_write_config(dev, ptr + PCIER_DEVICE_CTL2, devctl2, sizeof(devctl2));
 	}
 
 	/*
@@ -436,6 +423,24 @@ nvme_notify_fail_consumers(struct nvme_controller *ctrlr)
 		cons = &nvme_consumer[i];
 		if (cons->id != INVALID_CONSUMER_ID && cons->fail_fn != NULL)
 			cons->fail_fn(ctrlr->cons_cookie[i]);
+	}
+}
+
+void
+nvme_notify_ns(struct nvme_controller *ctrlr, int nsid)
+{
+	struct nvme_consumer	*cons;
+	struct nvme_namespace	*ns = &ctrlr->ns[nsid - 1];
+	uint32_t		i;
+
+	if (!ctrlr->is_initialized)
+		return;
+
+	for (i = 0; i < NVME_MAX_CONSUMERS; i++) {
+		cons = &nvme_consumer[i];
+		if (cons->id != INVALID_CONSUMER_ID && cons->ns_fn != NULL)
+			ns->cons_cookie[cons->id] =
+			    (*cons->ns_fn)(ns, ctrlr->cons_cookie[cons->id]);
 	}
 }
 

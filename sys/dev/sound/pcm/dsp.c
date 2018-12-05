@@ -2205,7 +2205,10 @@ dsp_mmap(struct cdev *i_dev, vm_ooffset_t offset, vm_paddr_t *paddr,
     int nprot, vm_memattr_t *memattr)
 {
 
-	/* XXX memattr is not honored */
+	/*
+	 * offset is in range due to checks in dsp_mmap_single().
+	 * XXX memattr is not honored.
+	 */
 	*paddr = vtophys(offset);
 	return (0);
 }
@@ -2222,7 +2225,7 @@ dsp_mmap_single(struct cdev *i_dev, vm_ooffset_t *offset,
 	 * Unfortunately, we have to give up this one due to linux_mmap
 	 * changes.
 	 *
-	 * http://lists.freebsd.org/pipermail/freebsd-emulation/2007-June/003698.html
+	 * https://lists.freebsd.org/pipermail/freebsd-emulation/2007-June/003698.html
 	 *
 	 */
 #ifdef SV_ABI_LINUX

@@ -380,8 +380,8 @@ iso_uiodir(idp,dp,off)
 {
 	int error;
 
-	dp->d_name[dp->d_namlen] = 0;
 	dp->d_reclen = GENERIC_DIRSIZ(dp);
+	dirent_terminate(dp);
 
 	if (idp->uio->uio_resid < dp->d_reclen) {
 		idp->eofflag = 0;
@@ -446,10 +446,10 @@ iso_shipdir(idp)
 	idp->current.d_reclen = GENERIC_DIRSIZ(&idp->current);
 	if (assoc) {
 		idp->assocoff = idp->curroff;
-		bcopy(&idp->current,&idp->assocent,idp->current.d_reclen);
+		memcpy(&idp->assocent, &idp->current, idp->current.d_reclen);
 	} else {
 		idp->saveoff = idp->curroff;
-		bcopy(&idp->current,&idp->saveent,idp->current.d_reclen);
+		memcpy(&idp->saveent, &idp->current, idp->current.d_reclen);
 	}
 	return (0);
 }
@@ -576,6 +576,8 @@ cd9660_readdir(ap)
 				entryoffsetinblock;
 
 		idp->curroff += reclen;
+		/* NOTE: d_off is the offset of *next* entry. */
+		idp->current.d_off = idp->curroff;
 
 		switch (imp->iso_ftype) {
 		case ISO_FTYPE_RRIP:

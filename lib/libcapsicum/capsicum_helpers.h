@@ -46,6 +46,8 @@
 #define	CAPH_WRITE		0x0004
 #define	CAPH_LOOKUP		0x0008
 
+__BEGIN_DECLS
+
 static __inline int
 caph_limit_stream(int fd, int flags)
 {
@@ -134,6 +136,35 @@ caph_enter(void)
 	return (0);
 }
 
+static __inline int
+caph_rights_limit(int fd, const cap_rights_t *rights)
+{
+
+	if (cap_rights_limit(fd, rights) < 0 && errno != ENOSYS)
+		return (-1);
+
+	return (0);
+}
+
+static __inline int
+caph_ioctls_limit(int fd, const unsigned long *cmds, size_t ncmds)
+{
+
+	if (cap_ioctls_limit(fd, cmds, ncmds) < 0 && errno != ENOSYS)
+		return (-1);
+
+	return (0);
+}
+
+static __inline int
+caph_fcntls_limit(int fd, uint32_t fcntlrights)
+{
+
+	if (cap_fcntls_limit(fd, fcntlrights) < 0 && errno != ENOSYS)
+		return (-1);
+
+	return (0);
+}
 
 static __inline int
 caph_enter_casper(void)
@@ -141,5 +172,7 @@ caph_enter_casper(void)
 
 	return (CASPER_SUPPORT == 0 ? 0 : caph_enter());
 }
+
+__END_DECLS
 
 #endif /* _CAPSICUM_HELPERS_H_ */

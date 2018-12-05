@@ -26,7 +26,7 @@
 .\"
 .\" $FreeBSD$
 .\"
-.Dd April 15, 2018
+.Dd November 9, 2018
 .Dt DAEMON 8
 .Os
 .Sh NAME
@@ -66,7 +66,7 @@ Redirect standard input, standard output and standard error to
 .It Fl S
 Enable syslog output.
 This is implicitly applied if other syslog parameters are provided.
-The default values are daemon, notice, and daemon for facility, priority, and 
+The default values are daemon, notice, and daemon for facility, priority, and
 tag, respectively.
 .It Fl o Ar output_file
 Append output from the daemonized process to
@@ -117,7 +117,7 @@ option is used or not.
 .It Fl r
 Supervise and restart the program after a one-second delay if it has
 been terminated.
-.It Fl R restart_delay_seconds
+.It Fl R Ar restart_delay_seconds
 Supervise and restart the program after the specified delay
 if it has been terminated.
 .It Fl t Ar title
@@ -212,6 +212,7 @@ The exact behavior depends on the logging parameters and the
 .Fl f
 flag.
 .Sh SEE ALSO
+.Xr nohup 1 ,
 .Xr setregid 2 ,
 .Xr setreuid 2 ,
 .Xr daemon 3 ,

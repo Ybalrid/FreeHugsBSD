@@ -109,7 +109,7 @@ SYSCTL_INT(_net_inet_ip, IPCTL_FORWARDING, forwarding, CTLFLAG_VNET | CTLFLAG_RW
     &VNET_NAME(ipforwarding), 0,
     "Enable IP forwarding between interfaces");
 
-static VNET_DEFINE(int, ipsendredirects) = 1;	/* XXX */
+VNET_DEFINE_STATIC(int, ipsendredirects) = 1;	/* XXX */
 #define	V_ipsendredirects	VNET(ipsendredirects)
 SYSCTL_INT(_net_inet_ip, IPCTL_SENDREDIRECTS, redirect, CTLFLAG_VNET | CTLFLAG_RW,
     &VNET_NAME(ipsendredirects), 0,
@@ -128,7 +128,7 @@ SYSCTL_INT(_net_inet_ip, IPCTL_SENDREDIRECTS, redirect, CTLFLAG_VNET | CTLFLAG_R
  * to the loopback interface instead of the interface where the
  * packets for those addresses are received.
  */
-static VNET_DEFINE(int, ip_checkinterface);
+VNET_DEFINE_STATIC(int, ip_checkinterface);
 #define	V_ip_checkinterface	VNET(ip_checkinterface)
 SYSCTL_INT(_net_inet_ip, OID_AUTO, check_interface, CTLFLAG_VNET | CTLFLAG_RW,
     &VNET_NAME(ip_checkinterface), 0,
@@ -399,7 +399,7 @@ ip_destroy(void *unused __unused)
 
 	/* Make sure the IPv4 routes are gone as well. */
 	IFNET_RLOCK();
-	TAILQ_FOREACH(ifp, &V_ifnet, if_link)
+	CK_STAILQ_FOREACH(ifp, &V_ifnet, if_link)
 		rt_flushifroutes_af(ifp, AF_INET);
 	IFNET_RUNLOCK();
 
@@ -448,6 +448,7 @@ ip_direct_input(struct mbuf *m)
 void
 ip_input(struct mbuf *m)
 {
+	struct rm_priotracker in_ifa_tracker;
 	struct ip *ip = NULL;
 	struct in_ifaddr *ia = NULL;
 	struct ifaddr *ifa;
@@ -557,13 +558,15 @@ tooshort:
 
 	/*
 	 * Try to forward the packet, but if we fail continue.
+	 * ip_tryforward() does not generate redirects, so fall
+	 * through to normal processing if redirects are required.
 	 * ip_tryforward() does inbound and outbound packet firewall
 	 * processing. If firewall has decided that destination becomes
 	 * our local address, it sets M_FASTFWD_OURS flag. In this
 	 * case skip another inbound firewall processing and update
 	 * ip pointer.
 	 */
-	if (V_ipforwarding != 0
+	if (V_ipforwarding != 0 && V_ipsendredirects == 0
 #if defined(IPSEC) || defined(IPSEC_SUPPORT)
 	    && (!IPSEC_ENABLED(ipv4) ||
 	    IPSEC_CAPS(ipv4, m, IPSEC_CAP_OPERABLE) == 0)
@@ -679,7 +682,7 @@ passin:
 	/*
 	 * Check for exact addresses in the hash bucket.
 	 */
-	/* IN_IFADDR_RLOCK(); */
+	IN_IFADDR_RLOCK(&in_ifa_tracker);
 	LIST_FOREACH(ia, INADDR_HASH(ip->ip_dst.s_addr), ia_hash) {
 		/*
 		 * If the address matches, verify that the packet
@@ -691,11 +694,11 @@ passin:
 			counter_u64_add(ia->ia_ifa.ifa_ipackets, 1);
 			counter_u64_add(ia->ia_ifa.ifa_ibytes,
 			    m->m_pkthdr.len);
-			/* IN_IFADDR_RUNLOCK(); */
+			IN_IFADDR_RUNLOCK(&in_ifa_tracker);
 			goto ours;
 		}
 	}
-	/* IN_IFADDR_RUNLOCK(); */
+	IN_IFADDR_RUNLOCK(&in_ifa_tracker);
 
 	/*
 	 * Check for broadcast addresses.
@@ -977,9 +980,9 @@ ip_forward(struct mbuf *m, int srcrt)
 #else
 	in_rtalloc_ign(&ro, 0, M_GETFIB(m));
 #endif
+	NET_EPOCH_ENTER();
 	if (ro.ro_rt != NULL) {
 		ia = ifatoia(ro.ro_rt->rt_ifa);
-		ifa_ref(&ia->ia_ifa);
 	} else
 		ia = NULL;
 	/*
@@ -1025,7 +1028,7 @@ ip_forward(struct mbuf *m, int srcrt)
 			m_freem(mcopy);
 			if (error != EINPROGRESS)
 				IPSTAT_INC(ips_cantforward);
-			return;
+			goto out;
 		}
 		/* No IPsec processing required */
 	}
@@ -1078,16 +1081,12 @@ ip_forward(struct mbuf *m, int srcrt)
 		else {
 			if (mcopy)
 				m_freem(mcopy);
-			if (ia != NULL)
-				ifa_free(&ia->ia_ifa);
-			return;
+			goto out;
 		}
 	}
-	if (mcopy == NULL) {
-		if (ia != NULL)
-			ifa_free(&ia->ia_ifa);
-		return;
-	}
+	if (mcopy == NULL)
+		goto out;
+
 
 	switch (error) {
 
@@ -1129,13 +1128,11 @@ ip_forward(struct mbuf *m, int srcrt)
 	case ENOBUFS:
 	case EACCES:			/* ipfw denied packet */
 		m_freem(mcopy);
-		if (ia != NULL)
-			ifa_free(&ia->ia_ifa);
-		return;
+		goto out;
 	}
-	if (ia != NULL)
-		ifa_free(&ia->ia_ifa);
 	icmp_error(mcopy, type, code, dest.s_addr, mtu);
+ out:
+	NET_EPOCH_EXIT();
 }
 
 #define	CHECK_SO_CT(sp, ct) \
@@ -1199,7 +1196,7 @@ ip_savecontrol(struct inpcb *inp, struct mbuf **mp, struct ip *ip,
 			mbuf_tstmp2timespec(m, &ts);
 			getboottimebin(&boottimebin);
 			bintime2timespec(&boottimebin, &ts1);
-			timespecadd(&ts, &ts1);
+			timespecadd(&ts, &ts1, &ts);
 		} else {
 			nanotime(&ts);
 		}
@@ -1353,7 +1350,7 @@ makedummy:
  * locking.  This code remains in ip_input.c as ip_mroute.c is optionally
  * compiled.
  */
-static VNET_DEFINE(int, ip_rsvp_on);
+VNET_DEFINE_STATIC(int, ip_rsvp_on);
 VNET_DEFINE(struct socket *, ip_rsvpd);
 
 #define	V_ip_rsvp_on		VNET(ip_rsvp_on)

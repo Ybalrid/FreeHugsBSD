@@ -372,7 +372,8 @@ static driver_t iwn_driver = {
 static devclass_t iwn_devclass;
 
 DRIVER_MODULE(iwn, pci, iwn_driver, iwn_devclass, NULL, NULL);
-
+MODULE_PNP_INFO("U16:vendor;U16:device;D:#", pci, iwn, iwn_ident_table,
+    nitems(iwn_ident_table) - 1);
 MODULE_VERSION(iwn, 1);
 
 MODULE_DEPEND(iwn, firmware, 1, 1, 1);
@@ -862,6 +863,7 @@ iwn_config_specific(struct iwn_softc *sc, uint16_t pid)
 			case IWN_SDID_6035_2:
 			case IWN_SDID_6035_3:
 			case IWN_SDID_6035_4:
+			case IWN_SDID_6035_5:
 				sc->fwname = "iwn6000g2bfw";
 				sc->limits = &iwn6235_sensitivity_limits;
 				sc->base_params = &iwn_6235_base_params;

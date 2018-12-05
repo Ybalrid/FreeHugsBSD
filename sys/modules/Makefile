@@ -26,14 +26,13 @@ SUBDIR=	\
 	${_aesni} \
 	age \
 	${_agp} \
-	aha \
 	ahci \
-	${_aic} \
 	aic7xxx \
 	alc \
 	ale \
 	alq \
 	${_amd_ecc_inject} \
+	${_amdgpio} \
 	${_amdsbwd} \
 	${_amdsmn} \
 	${_amdtemp} \
@@ -111,7 +110,6 @@ SUBDIR=	\
 	dcons_crom \
 	de \
 	${_dpms} \
-	${_dpt} \
 	${_drm} \
 	${_drm2} \
 	dummynet \
@@ -121,7 +119,6 @@ SUBDIR=	\
 	${_ena} \
 	${_ep} \
 	${_epic} \
-	epoch_test \
 	esp \
 	${_et} \
 	evdev \
@@ -154,6 +151,7 @@ SUBDIR=	\
 	${_hwpmc_mips74k} \
 	${_hyperv} \
 	i2c \
+	${_iavf} \
         ${_ibcore} \
 	${_ibcs2} \
 	${_ichwd} \
@@ -206,9 +204,7 @@ SUBDIR=	\
 	${_ix} \
 	${_ixv} \
 	${_ixl} \
-	${_ixlv} \
 	jme \
-	joy \
 	kbdmux \
 	kgssapi \
 	kgssapi_krb5 \
@@ -220,8 +216,6 @@ SUBDIR=	\
 	libalias \
 	libiconv \
 	libmchain \
-	${_linprocfs} \
-	${_linsysfs} \
 	${_linux} \
 	${_linux_common} \
 	${_linux64} \
@@ -234,6 +228,7 @@ SUBDIR=	\
 	mac_lomac \
 	mac_mls \
 	mac_none \
+	mac_ntpd \
 	mac_partition \
 	mac_portacl \
 	mac_seeotheruids \
@@ -262,7 +257,6 @@ SUBDIR=	\
 	mrsas \
 	msdosfs \
 	msdosfs_iconv \
-	${_mse} \
 	msk \
 	${_mthca} \
 	mvs \
@@ -272,9 +266,7 @@ SUBDIR=	\
 	my \
 	${_nandfs} \
 	${_nandsim} \
-	${_ncr} \
 	${_nctgpio} \
-	${_ncv} \
 	${_ndis} \
 	${_netgraph} \
 	${_nfe} \
@@ -286,10 +278,10 @@ SUBDIR=	\
 	nfssvc \
 	nge \
 	nmdm \
-	${_nsp} \
 	nullfs \
 	${_ntb} \
 	${_nvd} \
+	${_nvdimm} \
 	${_nvme} \
 	${_nvram} \
 	oce \
@@ -324,13 +316,13 @@ SUBDIR=	\
 	ral \
 	${_ralfw} \
 	${_random_fortuna} \
-	${_random_yarrow} \
 	${_random_other} \
 	rc4 \
 	${_rdma} \
 	${_rdrand_rng} \
 	re \
 	rl \
+	${_rockchip} \
 	rtwn \
 	rtwn_pci \
 	rtwn_usb \
@@ -339,7 +331,6 @@ SUBDIR=	\
 	${_safe} \
 	${_sbni} \
 	scc \
-	${_scsi_low} \
 	sdhci \
 	${_sdhci_acpi} \
 	sdhci_pci \
@@ -364,7 +355,6 @@ SUBDIR=	\
 	${_splash} \
 	${_sppp} \
 	ste \
-	${_stg} \
 	stge \
 	${_sym} \
 	${_syscons} \
@@ -437,7 +427,6 @@ SUBDIR+=	opensolaris
 _crypto=	crypto
 _cryptodev=	cryptodev
 _random_fortuna=random_fortuna
-_random_yarrow=	random_yarrow
 _random_other=	random_other
 .endif
 .endif
@@ -485,6 +474,12 @@ _ipfilter=	ipfilter
 SUBDIR+=	cfiscsi
 SUBDIR+=	iscsi
 SUBDIR+=	iscsi_initiator
+.endif
+
+.if ${MACHINE_CPUARCH} == "aarch64" || ${MACHINE_CPUARCH} == "amd64" || \
+    ${MACHINE_CPUARCH} == "i386"
+SUBDIR+=	linprocfs
+SUBDIR+=	linsysfs
 .endif
 
 .if ${MK_NAND} != "no" || defined(ALL_MODULES)
@@ -563,6 +558,7 @@ _allwinner=	allwinner
 _armv8crypto=	armv8crypto
 _efirt=		efirt
 _em=		em
+_rockchip=	rockchip
 .endif
 
 .if ${MACHINE_CPUARCH} == "i386" || ${MACHINE_CPUARCH} == "amd64"
@@ -580,8 +576,12 @@ _cpuctl=	cpuctl
 _cpufreq=	cpufreq
 _cs=		cs
 _dpms=		dpms
+.if ${MK_MODULE_DRM} != "no"
 _drm=		drm
+.endif
+.if ${MK_MODULE_DRM2} != "no"
 _drm2=		drm2
+.endif
 _ed=		ed
 _em=		em
 _ena=		ena
@@ -600,8 +600,6 @@ _iser=		iser
 .endif
 _ix=		ix
 _ixv=		ixv
-_linprocfs=	linprocfs
-_linsysfs=	linsysfs
 _linux=		linux
 .if ${MK_SOURCELESS_UCODE} != "no"
 _lio=		lio
@@ -614,7 +612,6 @@ _pccard=	pccard
 _rdma=		rdma
 .endif
 _safe=		safe
-_scsi_low=	scsi_low
 _speaker=	speaker
 _splash=	splash
 _sppp=		sppp
@@ -627,7 +624,9 @@ _aac=		aac
 _aacraid=	aacraid
 _acpi=		acpi
 .if ${MK_CRYPT} != "no" || defined(ALL_MODULES)
+.if ${COMPILER_TYPE} != "gcc" || ${COMPILER_VERSION} > 40201
 _aesni=		aesni
+.endif
 .endif
 _amd_ecc_inject=amd_ecc_inject
 _amdsbwd=	amdsbwd
@@ -708,14 +707,16 @@ _x86bios=	x86bios
 .endif
 
 .if ${MACHINE_CPUARCH} == "amd64"
+_amdgpio=	amdgpio
 _ccp=		ccp
 _efirt=		efirt
+_iavf=		iavf
 _ioat=		ioat
 _ixl=		ixl
-_ixlv=		ixlv
 _linux64=	linux64
 _linux_common=	linux_common
 _ntb=		ntb
+_nvdimm=	nvdimm
 _pms=		pms
 _qlxge=		qlxge
 _qlxgb=		qlxgb
@@ -738,7 +739,6 @@ _vmm=		vmm
 # XXX some of these can move now, but are untested on other architectures.
 _3dfx=		3dfx
 _3dfx_linux=	3dfx_linux
-_aic=		aic
 _apm=		apm
 .if ${MK_SOURCELESS_UCODE} != "no"
 _ce=		ce
@@ -750,18 +750,12 @@ _cp=		cp
 _glxiic=	glxiic
 _glxsb=		glxsb
 #_ibcs2=		ibcs2
-_mse=		mse
-_ncr=		ncr
-_ncv=		ncv
-_nsp=		nsp
 _pcfclock=	pcfclock
 _pst=		pst
 _sbni=		sbni
-_stg=		stg
 .if ${MK_SOURCELESS_UCODE} != "no"
 _ctau=		ctau
 .endif
-_dpt=		dpt
 _ex=		ex
 .endif
 
@@ -778,15 +772,22 @@ _cardbus=	cardbus
 _cbb=		cbb
 _cfi=		cfi
 _cpufreq=	cpufreq
+.if ${MK_MODULE_DRM} != "no"
 _drm=		drm
+.endif
 _exca=		exca
 _ffec=		ffec
+_nvd=		nvd
+_nvme=		nvme
 _pccard=	pccard
 _wi=		wi
 .endif
 
 .if ${MACHINE_ARCH} == "powerpc64"
+.if ${MK_MODULE_DRM2} != "no"
 _drm2=		drm2
+.endif
+_ipmi=		ipmi
 .endif
 .if ${MACHINE_ARCH} == "powerpc64" || ${MACHINE_ARCH} == "powerpc"
 # Don't build powermac_nvram for powerpcspe, it's never supported.

@@ -71,6 +71,7 @@ struct vm_pagequeue {
 	struct pglist	pq_pl;
 	int		pq_cnt;
 	const char	* const pq_name;
+	uint64_t	pq_pdpages;
 } __aligned(CACHE_LINE_SIZE);
 
 #ifndef VM_BATCHQUEUE_SIZE
@@ -103,7 +104,8 @@ struct vm_domain {
 	struct mtx_padalign vmd_free_mtx;
 	struct mtx_padalign vmd_pageout_mtx;
 	uma_zone_t vmd_pgcache;		/* (c) page free cache. */
-	struct vmem *vmd_kernel_arena;	/* (c) per-domain kva arena. */
+	struct vmem *vmd_kernel_arena;	/* (c) per-domain kva R/W arena. */
+	struct vmem *vmd_kernel_rwx_arena; /* (c) per-domain kva R/W/X arena. */
 	u_int vmd_domain;		/* (c) Domain number. */
 	u_int vmd_page_count;		/* (c) Total page count. */
 	long vmd_segs;			/* (c) bitmask of the segments */
@@ -149,7 +151,8 @@ struct vm_domain {
 
 extern struct vm_domain vm_dom[MAXMEMDOM];
 
-#define	VM_DOMAIN(n)	(&vm_dom[(n)])
+#define	VM_DOMAIN(n)		(&vm_dom[(n)])
+#define	VM_DOMAIN_EMPTY(n)	(vm_dom[(n)].vmd_page_count == 0)
 
 #define	vm_pagequeue_assert_locked(pq)	mtx_assert(&(pq)->pq_mutex, MA_OWNED)
 #define	vm_pagequeue_lock(pq)		mtx_lock(&(pq)->pq_mutex)

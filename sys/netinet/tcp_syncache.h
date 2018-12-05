@@ -46,7 +46,7 @@ int	 syncache_expand(struct in_conninfo *, struct tcpopt *,
 int	 syncache_add(struct in_conninfo *, struct tcpopt *,
 	     struct tcphdr *, struct inpcb *, struct socket **, struct mbuf *,
 	     void *, void *);
-void	 syncache_chkrst(struct in_conninfo *, struct tcphdr *);
+void	 syncache_chkrst(struct in_conninfo *, struct tcphdr *, struct mbuf *);
 void	 syncache_badack(struct in_conninfo *);
 int	 syncache_pcblist(struct sysctl_req *req, int max_pcbs, int *pcbs_exported);
 
@@ -56,7 +56,6 @@ struct syncache {
 	int		sc_rxttime;		/* retransmit time */
 	u_int16_t	sc_rxmits;		/* retransmit counter */
 	u_int32_t	sc_tsreflect;		/* timestamp to reflect */
-	u_int32_t	sc_ts;			/* our timestamp to send */
 	u_int32_t	sc_tsoff;		/* ts offset w/ syncookies */
 	u_int32_t	sc_flowlabel;		/* IPv6 flowlabel */
 	tcp_seq		sc_irs;			/* seq from peer */

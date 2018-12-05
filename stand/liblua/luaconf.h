@@ -202,9 +202,9 @@
 
 #else			/* }{ */
 
-#define LUA_ROOT	"/usr/local/"
-#define LUA_LDIR	LUA_ROOT "share/lua/" LUA_VDIR "/"
-#define LUA_CDIR	LUA_ROOT "lib/lua/" LUA_VDIR "/"
+#define LUA_ROOT       "/boot/lua/" LUA_VDIR "/"
+#define LUA_LDIR       LUA_ROOT "share/"
+#define LUA_CDIR       LUA_ROOT "lib/"
 #ifndef LUA_PATH_DEFAULT
 #define LUA_PATH_DEFAULT  \
 		LUA_LDIR"?.lua;"  LUA_LDIR"?/init.lua;" \
@@ -450,9 +450,7 @@
 ** and therefore its conversion to float may have an ill-defined value.)
 */
 #define lua_numbertointeger(n,p) \
-  ((n) >= (LUA_NUMBER)(LUA_MININTEGER) && \
-   (n) < -(LUA_NUMBER)(LUA_MININTEGER) && \
-      (*(p) = (LUA_INTEGER)(n), 1))
+      (*(p) = (LUA_INTEGER)(n), 1)
 
 
 /* now the variable definitions */
@@ -648,6 +646,13 @@
 #if !defined(LUA_USE_C89)
 #define lua_strx2number(s,p)		lua_str2number(s,p)
 #endif
+
+
+/*
+@@ lua_pointer2str converts a pointer to a readable string in a
+** non-specified way.
+*/
+#define lua_pointer2str(buff,sz,p)	l_sprintf(buff,sz,"%p",p)
 
 
 /*

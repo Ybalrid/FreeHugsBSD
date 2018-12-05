@@ -63,6 +63,7 @@ __FBSDID("$FreeBSD$");
 #include <protocols/rwhod.h>
 
 #include <ctype.h>
+#include <capsicum_helpers.h>
 #include <err.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -368,11 +369,11 @@ receiver_process(void)
 	}
 	cap_rights_init(&rights, CAP_CREATE, CAP_FSTAT, CAP_FTRUNCATE,
 	    CAP_LOOKUP, CAP_SEEK, CAP_WRITE);
-	if (cap_rights_limit(dirfd, &rights) < 0 && errno != ENOSYS) {
+	if (caph_rights_limit(dirfd, &rights) < 0) {
 		syslog(LOG_WARNING, "cap_rights_limit: %m");
 		exit(1);
 	}
-	if (cap_enter() < 0 && errno != ENOSYS) {
+	if (caph_enter() < 0) {
 		syslog(LOG_ERR, "cap_enter: %m");
 		exit(1);
 	}
@@ -414,7 +415,7 @@ receiver_process(void)
 			continue;
 		}
 		cap_rights_init(&rights, CAP_FSTAT, CAP_FTRUNCATE, CAP_WRITE);
-		if (cap_rights_limit(whod, &rights) < 0 && errno != ENOSYS) {
+		if (caph_rights_limit(whod, &rights) < 0) {
 			syslog(LOG_WARNING, "cap_rights_limit: %m");
 			exit(1);
 		}

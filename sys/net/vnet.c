@@ -171,14 +171,14 @@ static MALLOC_DEFINE(M_VNET_DATA, "vnet_data", "VNET data");
  * we want the virtualized global variable space to be page-sized, we may
  * have more space than that in practice.
  */
-#define	VNET_MODMIN	8192
+#define	VNET_MODMIN	(8 * PAGE_SIZE)
 #define	VNET_SIZE	roundup2(VNET_BYTES, PAGE_SIZE)
 
 /*
  * Space to store virtualized global variables from loadable kernel modules,
  * and the free list to manage it.
  */
-static VNET_DEFINE(char, modspace[VNET_MODMIN]);
+VNET_DEFINE_STATIC(char, modspace[VNET_MODMIN] __aligned(__alignof(void *)));
 
 /*
  * Global lists of subsystem constructor and destructors for vnets.  They are

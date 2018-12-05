@@ -989,6 +989,7 @@ printcpuinfo(void)
 				       "\020"
 				       "\033IBPB"
 				       "\034STIBP"
+				       "\035L1DFL"
 				       "\036ARCH_CAP"
 				       "\040SSBD"
 				       );
@@ -1013,6 +1014,9 @@ printcpuinfo(void)
 				       "\020"
 				       "\001RDCL_NO"
 				       "\002IBRS_ALL"
+				       "\003RSBA"
+				       "\004SKIP_L1DFL_VME"
+				       "\005SSB_NO"
 				       );
 			}
 
@@ -1466,6 +1470,19 @@ identify_cpu2(void)
 	}
 }
 
+void
+identify_cpu_fixup_bsp(void)
+{
+	u_int regs[4];
+
+	cpu_vendor_id = find_cpu_vendor_id();
+
+	if (fix_cpuid()) {
+		do_cpuid(0, regs);
+		cpu_high = regs[0];
+	}
+}
+
 /*
  * Final stage of CPU identification.
  */
@@ -1477,12 +1494,7 @@ finishidentcpu(void)
 	u_char ccr3;
 #endif
 
-	cpu_vendor_id = find_cpu_vendor_id();
-
-	if (fix_cpuid()) {
-		do_cpuid(0, regs);
-		cpu_high = regs[0];
-	}
+	identify_cpu_fixup_bsp();
 
 	if (cpu_high >= 5 && (cpu_feature2 & CPUID2_MON) != 0) {
 		do_cpuid(5, regs);

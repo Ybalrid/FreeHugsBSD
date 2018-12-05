@@ -50,9 +50,17 @@ local MSG_FAILEXAF = "Failed to execute '%s' after loading '%s'"
 local MSG_MALFORMED = "Malformed line (%d):\n\t'%s'"
 local MSG_DEFAULTKERNFAIL = "No kernel set, failed to load from module_path"
 local MSG_KERNFAIL = "Failed to load kernel '%s'"
+local MSG_XENKERNFAIL = "Failed to load Xen kernel '%s'"
+local MSG_XENKERNLOADING = "Loading Xen kernel..."
 local MSG_KERNLOADING = "Loading kernel..."
 local MSG_MODLOADING = "Loading configured modules..."
-local MSG_MODLOADFAIL = "Could not load one or more modules!"
+local MSG_MODBLACKLIST = "Not loading blacklisted module '%s'"
+
+local MODULEEXPR = '([%w-_]+)'
+local QVALEXPR = "\"([%w%s%p]-)\""
+local QVALREPL = QVALEXPR:gsub('%%', '%%%%')
+local WORDEXPR = "([%w]+)"
+local WORDREPL = WORDEXPR:gsub('%%', '%%%%')
 
 local function restoreEnv()
 	-- Examine changed environment variables
@@ -102,14 +110,69 @@ local function setKey(key, name, value)
 	modules[key][name] = value
 end
 
+-- Escapes the named value for use as a literal in a replacement pattern.
+-- e.g. dhcp.host-name gets turned into dhcp%.host%-name to remove the special
+-- meaning.
+local function escapeName(name)
+	return name:gsub("([%p])", "%%%1")
+end
+
+local function processEnvVar(value)
+	for name in value:gmatch("${([^}]+)}") do
+		local replacement = loader.getenv(name) or ""
+		value = value:gsub("${" .. escapeName(name) .. "}", replacement)
+	end
+	for name in value:gmatch("$([%w%p]+)%s*") do
+		local replacement = loader.getenv(name) or ""
+		value = value:gsub("$" .. escapeName(name), replacement)
+	end
+	return value
+end
+
+local function checkPattern(line, pattern)
+	local function _realCheck(_line, _pattern)
+		return _line:match(_pattern)
+	end
+
+	if pattern:find('$VALUE') then
+		local k, v, c
+		k, v, c = _realCheck(line, pattern:gsub('$VALUE', QVALREPL))
+		if k ~= nil then
+			return k,v, c
+		end
+		return _realCheck(line, pattern:gsub('$VALUE', WORDREPL))
+	else
+		return _realCheck(line, pattern)
+	end
+end
+
+-- str in this table is a regex pattern.  It will automatically be anchored to
+-- the beginning of a line and any preceding whitespace will be skipped.  The
+-- pattern should have no more than two captures patterns, which correspond to
+-- the two parameters (usually 'key' and 'value') that are passed to the
+-- process function.  All trailing characters will be validated.  Any $VALUE
+-- token included in a pattern will be tried first with a quoted value capture
+-- group, then a single-word value capture group.  This is our kludge for Lua
+-- regex not supporting branching.
+--
+-- We have two special entries in this table: the first is the first entry,
+-- a full-line comment.  The second is for 'exec' handling.  Both have a single
+-- capture group, but the difference is that the full-line comment pattern will
+-- match the entire line.  This does not run afoul of the later end of line
+-- validation that we'll do after a match.  However, the 'exec' pattern will.
+-- We document the exceptions with a special 'groups' index that indicates
+-- the number of capture groups, if not two.  We'll use this later to do
+-- validation on the proper entry.
+--
 local pattern_table = {
 	{
-		str = "^%s*(#.*)",
+		str = "(#.*)",
 		process = function(_, _)  end,
+		groups = 1,
 	},
 	--  module_load="value"
 	{
-		str = "^%s*([%w_]+)_load%s*=%s*\"([%w%s%p]-)\"%s*(.*)",
+		str = MODULEEXPR .. "_load%s*=%s*$VALUE",
 		process = function(k, v)
 			if modules[k] == nil then
 				modules[k] = {}
@@ -119,69 +182,70 @@ local pattern_table = {
 	},
 	--  module_name="value"
 	{
-		str = "^%s*([%w_]+)_name%s*=%s*\"([%w%s%p]-)\"%s*(.*)",
+		str = MODULEEXPR .. "_name%s*=%s*$VALUE",
 		process = function(k, v)
 			setKey(k, "name", v)
 		end,
 	},
 	--  module_type="value"
 	{
-		str = "^%s*([%w_]+)_type%s*=%s*\"([%w%s%p]-)\"%s*(.*)",
+		str = MODULEEXPR .. "_type%s*=%s*$VALUE",
 		process = function(k, v)
 			setKey(k, "type", v)
 		end,
 	},
 	--  module_flags="value"
 	{
-		str = "^%s*([%w_]+)_flags%s*=%s*\"([%w%s%p]-)\"%s*(.*)",
+		str = MODULEEXPR .. "_flags%s*=%s*$VALUE",
 		process = function(k, v)
 			setKey(k, "flags", v)
 		end,
 	},
 	--  module_before="value"
 	{
-		str = "^%s*([%w_]+)_before%s*=%s*\"([%w%s%p]-)\"%s*(.*)",
+		str = MODULEEXPR .. "_before%s*=%s*$VALUE",
 		process = function(k, v)
 			setKey(k, "before", v)
 		end,
 	},
 	--  module_after="value"
 	{
-		str = "^%s*([%w_]+)_after%s*=%s*\"([%w%s%p]-)\"%s*(.*)",
+		str = MODULEEXPR .. "_after%s*=%s*$VALUE",
 		process = function(k, v)
 			setKey(k, "after", v)
 		end,
 	},
 	--  module_error="value"
 	{
-		str = "^%s*([%w_]+)_error%s*=%s*\"([%w%s%p]-)\"%s*(.*)",
+		str = MODULEEXPR .. "_error%s*=%s*$VALUE",
 		process = function(k, v)
 			setKey(k, "error", v)
 		end,
 	},
 	--  exec="command"
 	{
-		str = "^%s*exec%s*=%s*\"([%w%s%p]-)\"%s*(.*)",
+		str = "exec%s*=%s*" .. QVALEXPR,
 		process = function(k, _)
 			if cli_execute_unparsed(k) ~= 0 then
 				print(MSG_FAILEXEC:format(k))
 			end
 		end,
+		groups = 1,
 	},
 	--  env_var="value"
 	{
-		str = "^%s*([%w%p]+)%s*=%s*\"([%w%s%p]-)\"%s*(.*)",
+		str = "([%w%p]+)%s*=%s*$VALUE",
 		process = function(k, v)
-			if setEnv(k, v) ~= 0 then
+			if setEnv(k, processEnvVar(v)) ~= 0 then
 				print(MSG_FAILSETENV:format(k, v))
 			end
 		end,
 	},
 	--  env_var=num
 	{
-		str = "^%s*([%w%p]+)%s*=%s*(%d+)%s*(.*)",
+		str = "([%w%p]+)%s*=%s*(-?%d+)",
 		process = function(k, v)
-			if setEnv(k, v) ~= 0 then
+			if setEnv(k, processEnvVar(v)) ~= 0 then
 				print(MSG_FAILSETENV:format(k, tostring(v)))
 			end
 		end,
@@ -201,22 +265,42 @@ local function isValidComment(line)
 	return true
 end
 
+local function getBlacklist()
+	local blacklist = {}
+	local blacklist_str = loader.getenv('module_blacklist')
+	if blacklist_str == nil then
+		return blacklist
+	end
+
+	for mod in blacklist_str:gmatch("[;, ]?([%w-_]+)[;, ]?") do
+		blacklist[mod] = true
+	end
+	return blacklist
+end
+
 local function loadModule(mod, silent)
 	local status = true
+	local blacklist = getBlacklist()
 	local pstatus
 	for k, v in pairs(mod) do
 		if v.load ~= nil and v.load:lower() == "yes" then
-			local str = "load "
-			if v.flags ~= nil then
-				str = str .. v.flags .. " "
+			local module_name = v.name or k
+			if blacklist[module_name] ~= nil then
+				if not silent then
+					print(MSG_MODBLACKLIST:format(module_name))
+				end
+				goto continue
 			end
+			if not silent then
+				loader.printc(module_name .. "...")
+			end
+			local str = "load "
 			if v.type ~= nil then
 				str = str .. "-t " .. v.type .. " "
 			end
-			if v.name ~= nil then
-				str = str .. v.name
-			else
-				str = str .. k
+			str = str .. module_name
+			if v.flags ~= nil then
+				str = str .. " " .. v.flags
 			end
 			if v.before ~= nil then
 				pstatus = cli_execute_unparsed(v.before) == 0
@@ -227,29 +311,63 @@ local function loadModule(mod, silent)
 			end
 
 			if cli_execute_unparsed(str) ~= 0 then
+				-- XXX Temporary shim: don't break the boot if
+				-- loader hadn't been recompiled with this
+				-- function exposed.
+				if loader.command_error then
+					print(loader.command_error())
+				end
 				if not silent then
-					print(MSG_FAILEXMOD:format(str))
+					print("failed!")
 				end
 				if v.error ~= nil then
 					cli_execute_unparsed(v.error)
 				end
 				status = false
-			end
-
-			if v.after ~= nil then
+			elseif v.after ~= nil then
 				pstatus = cli_execute_unparsed(v.after) == 0
 				if not pstatus and not silent then
 					print(MSG_FAILEXAF:format(v.after, k))
 				end
+				if not silent then
+					print("ok")
+				end
 				status = status and pstatus
 			end
-
 		end
+		::continue::
 	end
 
 	return status
 end
 
+local function readConfFiles(loaded_files)
+	local f = loader.getenv("loader_conf_files")
+	if f ~= nil then
+		for name in f:gmatch("([%w%p]+)%s*") do
+			if loaded_files[name] ~= nil then
+				goto continue
+			end
+
+			local prefiles = loader.getenv("loader_conf_files")
+
+			print("Loading " .. name)
+			-- These may or may not exist, and that's ok. Do a
+			-- silent parse so that we complain on parse errors but
+			-- not for them simply not existing.
+			if not config.processFile(name, true) then
+				print(MSG_FAILPARSECFG:format(name))
+			end
+
+			loaded_files[name] = true
+			local newfiles = loader.getenv("loader_conf_files")
+			if prefiles ~= newfiles then
+				readConfFiles(loaded_files)
+			end
+			::continue::
+		end
+	end
+end
 
 local function readFile(name, silent)
 	local f = io.open(name)
@@ -271,7 +389,7 @@ local function readFile(name, silent)
 end
 
 local function checkNextboot()
-	local nextboot_file = loader.getenv("nextboot_file")
+	local nextboot_file = loader.getenv("nextboot_conf")
 	if nextboot_file == nil then
 		return
 	end
@@ -341,30 +459,30 @@ function config.parse(text)
 
 	for line in text:gmatch("([^\n]+)") do
 		if line:match("^%s*$") == nil then
-			local found = false
-
 			for _, val in ipairs(pattern_table) do
-				local k, v, c = line:match(val.str)
+				local pattern = '^%s*' .. val.str .. '%s*(.*)';
+				local cgroups = val.groups or 2
+				local k, v, c = checkPattern(line, pattern)
 				if k ~= nil then
-					found = true
+					-- Offset by one, drats
+					if cgroups == 1 then
+						c = v
+						v = nil
+					end
 
 					if isValidComment(c) then
 						val.process(k, v)
-					else
-						print(MSG_MALFORMED:format(n,
-						    line))
-						status = false
+						goto nextline
 					end
 
 					break
 				end
 			end
 
-			if not found then
-				print(MSG_MALFORMED:format(n, line))
-				status = false
-			end
+			print(MSG_MALFORMED:format(n, line))
+			status = false
 		end
+		::nextline::
 		n = n + 1
 	end
 
@@ -379,13 +497,28 @@ function config.loadKernel(other_kernel)
 
 	local function tryLoad(names)
 		for name in names:gmatch("([^;]+)%s*;?") do
-			local r = loader.perform("load " .. flags ..
-			    " " .. name)
+			local r = loader.perform("load " .. name ..
+			     " " .. flags)
 			if r == 0 then
 				return name
 			end
 		end
 		return nil
+	end
+
+	local function getModulePath()
+		local module_path = loader.getenv("module_path")
+		local kernel_path = loader.getenv("kernel_path")
+
+		if kernel_path == nil then
+			return module_path
+		end
+
+		-- Strip the loaded kernel path from module_path. This currently assumes
+		-- that the kernel path will be prepended to the module_path when it's
+		-- found.
+		kernel_path = escapeName(kernel_path .. ';')
+		return module_path:gsub(kernel_path, '')
 	end
 
 	local function loadBootfile()
@@ -416,7 +549,7 @@ function config.loadKernel(other_kernel)
 	else
 		-- Use our cached module_path, so we don't end up with multiple
 		-- automatically added kernel paths to our final module_path
-		local module_path = config.module_path
+		local module_path = getModulePath()
 		local res
 
 		if other_kernel ~= nil then
@@ -436,6 +569,7 @@ function config.loadKernel(other_kernel)
 				if module_path ~= nil then
 					loader.setenv("module_path", v .. ";" ..
 					    module_path)
+					loader.setenv("kernel_path", v)
 				end
 				return true
 			end
@@ -458,7 +592,7 @@ function config.selectKernel(kernel)
 	config.kernel_selected = kernel
 end
 
-function config.load(file)
+function config.load(file, reloading)
 	if not file then
 		file = "/boot/defaults/loader.conf"
 	end
@@ -467,50 +601,49 @@ function config.load(file)
 		print(MSG_FAILPARSECFG:format(file))
 	end
 
-	local f = loader.getenv("loader_conf_files")
-	if f ~= nil then
-		for name in f:gmatch("([%w%p]+)%s*") do
-			-- These may or may not exist, and that's ok. Do a
-			-- silent parse so that we complain on parse errors but
-			-- not for them simply not existing.
-			if not config.processFile(name, true) then
-				print(MSG_FAILPARSECFG:format(name))
-			end
-		end
-	end
+	local loaded_files = {file = true}
+	readConfFiles(loaded_files)
 
 	checkNextboot()
 
-	-- Cache the provided module_path at load time for later use
-	config.module_path = loader.getenv("module_path")
 	local verbose = loader.getenv("verbose_loading") or "no"
 	config.verbose = verbose:lower() == "yes"
+	if not reloading then
+		hook.runAll("config.loaded")
+	end
 end
 
 -- Reload configuration
 function config.reload(file)
 	modules = {}
 	restoreEnv()
-	config.load(file)
+	config.load(file, true)
 	hook.runAll("config.reloaded")
 end
 
 function config.loadelf()
+	local xen_kernel = loader.getenv('xen_kernel')
 	local kernel = config.kernel_selected or config.kernel_loaded
 	local loaded
 
+	if xen_kernel ~= nil then
+		print(MSG_XENKERNLOADING)
+		if cli_execute_unparsed('load ' .. xen_kernel) ~= 0 then
+			print(MSG_XENKERNFAIL:format(xen_kernel))
+			return false
+		end
+	end
 	print(MSG_KERNLOADING)
 	loaded = config.loadKernel(kernel)
 
 	if not loaded then
-		return
+		return false
 	end
 
 	print(MSG_MODLOADING)
-	if not loadModule(modules, not config.verbose) then
-		print(MSG_MODLOADFAIL)
-	end
+	return loadModule(modules, not config.verbose)
 end
 
+hook.registerType("config.loaded")
 hook.registerType("config.reloaded")
 return config

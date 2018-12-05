@@ -20,7 +20,7 @@ cloudabi32_vdso_blob.o		optional	compat_cloudabi32	\
 	clean		"cloudabi32_vdso_blob.o"
 #
 linux_genassym.o		optional	compat_linux		\
-	dependency 	"$S/i386/linux/linux_genassym.c"		\
+	dependency 	"$S/i386/linux/linux_genassym.c offset.inc"		\
 	compile-with	"${CC} ${CFLAGS:N-flto:N-fno-common} -c ${.IMPSRC}" \
 	no-obj no-implicit-rule						\
 	clean		"linux_genassym.o"
@@ -151,7 +151,6 @@ dev/acpica/acpi_pci_link.c	optional acpi pci
 dev/acpica/acpi_pcib.c		optional acpi pci
 dev/acpica/acpi_pcib_acpi.c	optional acpi pci
 dev/acpica/acpi_pcib_pci.c	optional acpi pci
-dev/advansys/adv_isa.c		optional adv isa
 dev/agp/agp_ali.c		optional agp
 dev/agp/agp_amd.c		optional agp
 dev/agp/agp_amd64.c		optional agp
@@ -161,7 +160,6 @@ dev/agp/agp_intel.c		optional agp
 dev/agp/agp_nvidia.c		optional agp
 dev/agp/agp_sis.c		optional agp
 dev/agp/agp_via.c		optional agp
-dev/aic/aic_isa.c		optional aic isa
 dev/amdsbwd/amdsbwd.c		optional amdsbwd
 dev/amdsmn/amdsmn.c		optional amdsmn | amdtemp
 dev/amdtemp/amdtemp.c		optional amdtemp
@@ -234,9 +232,6 @@ dev/hwpmc/hwpmc_amd.c		optional hwpmc
 dev/hwpmc/hwpmc_intel.c		optional hwpmc
 dev/hwpmc/hwpmc_core.c		optional hwpmc
 dev/hwpmc/hwpmc_uncore.c	optional hwpmc
-dev/hwpmc/hwpmc_pentium.c	optional hwpmc
-dev/hwpmc/hwpmc_piv.c		optional hwpmc
-dev/hwpmc/hwpmc_ppro.c		optional hwpmc
 dev/hwpmc/hwpmc_tsc.c		optional hwpmc
 dev/hwpmc/hwpmc_x86.c		optional hwpmc
 dev/hyperv/pcib/vmbus_pcib.c				optional	hyperv pci
@@ -281,8 +276,6 @@ dev/ipmi/ipmi_ssif.c		optional ipmi smbus
 dev/ipmi/ipmi_pci.c		optional ipmi pci
 dev/ipmi/ipmi_linux.c		optional ipmi compat_linux
 dev/le/if_le_isa.c		optional le isa
-dev/mse/mse.c			optional mse
-dev/mse/mse_isa.c		optional mse isa
 dev/nctgpio/nctgpio.c		optional nctgpio
 dev/nfe/if_nfe.c		optional nfe pci
 dev/ntb/if_ntb/if_ntb.c		optional if_ntb
@@ -477,8 +470,6 @@ i386/bios/smapi.c		optional smapi
 i386/bios/smapi_bios.S		optional smapi
 i386/cloudabi32/cloudabi32_sysvec.c	optional compat_cloudabi32
 #i386/i386/apic_vector.s		optional apic
-i386/i386/atomic.c		standard		\
-	compile-with	"${CC} -c ${CFLAGS} ${DEFINED_PROF:S/^$/-fomit-frame-pointer/} ${.IMPSRC}"
 i386/i386/bios.c		standard
 i386/i386/bioscall.s		standard
 i386/i386/bpf_jit_machdep.c	optional bpf_jitter
@@ -553,7 +544,7 @@ kern/subr_sfbuf.c		standard
 libkern/divdi3.c		standard
 libkern/ffsll.c			standard
 libkern/flsll.c			standard
-libkern/memmove.c		standard
+libkern/memcmp.c		standard
 libkern/memset.c		standard
 libkern/moddi3.c		standard
 libkern/qdivrem.c		standard
@@ -627,6 +618,7 @@ x86/x86/msi.c			optional apic pci
 x86/x86/nexus.c			standard
 x86/x86/stack_machdep.c		optional ddb | stack
 x86/x86/tsc.c			standard
+x86/x86/ucode.c			standard
 x86/x86/pvclock.c		standard
 x86/x86/delay.c			standard
 x86/xen/hvm.c			optional xenhvm

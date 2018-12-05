@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2015 Tycho Nightingale <tycho.nightingale@pluribusnetworks.com>
  * Copyright (c) 2015 Leon Dang
  * All rights reserved.
@@ -40,6 +42,7 @@ __FBSDID("$FreeBSD$");
 #include <machine/cpufunc.h>
 #include <machine/specialreg.h>
 #include <netinet/in.h>
+#include <netdb.h>
 
 #include <assert.h>
 #include <err.h>
@@ -72,11 +75,11 @@ static int rfb_debug = 0;
 #define AUTH_LENGTH	16
 #define PASSWD_LENGTH	8
 
-#define SECURITY_TYPE_NONE 1
-#define SECURITY_TYPE_VNC_AUTH 2
+#define SECURITY_TYPE_NONE	1
+#define SECURITY_TYPE_VNC_AUTH	2
 
-#define AUTH_FAILED_UNAUTH 1
-#define AUTH_FAILED_ERROR 2
+#define AUTH_FAILED_UNAUTH	1
+#define AUTH_FAILED_ERROR	2
 
 struct rfb_softc {
 	int		sfd;
@@ -138,12 +141,12 @@ struct rfb_pixfmt_msg {
 #define	RFB_ENCODING_ZLIB		6
 #define	RFB_ENCODING_RESIZE		-223
 
-#define RFB_MAX_WIDTH			2000
-#define RFB_MAX_HEIGHT			1200
+#define	RFB_MAX_WIDTH			2000
+#define	RFB_MAX_HEIGHT			1200
 #define	RFB_ZLIB_BUFSZ			RFB_MAX_WIDTH*RFB_MAX_HEIGHT*4
 
 /* percentage changes to screen before sending the entire screen */
-#define RFB_SEND_ALL_THRESH             25
+#define	RFB_SEND_ALL_THRESH		25
 
 struct rfb_enc_msg {
 	uint8_t		type;
@@ -304,7 +307,7 @@ rfb_send_rect(struct rfb_softc *rc, int cfd, struct bhyvegc_image *gc,
               int x, int y, int w, int h)
 {
 	struct rfb_srvr_updt_msg supdt_msg;
-        struct rfb_srvr_rect_hdr srect_hdr;
+	struct rfb_srvr_rect_hdr srect_hdr;
 	unsigned long zlen;
 	ssize_t nwrite, total;
 	int err;
@@ -464,9 +467,9 @@ doraw:
 	return (nwrite);
 }
 
-#define PIX_PER_CELL	32
+#define	PIX_PER_CELL	32
 #define	PIXCELL_SHIFT	5
-#define PIXCELL_MASK	0x1F
+#define	PIXCELL_MASK	0x1F
 
 static int
 rfb_send_screen(struct rfb_softc *rc, int cfd, int all)
@@ -712,7 +715,7 @@ rfb_wr_thr(void *arg)
 		tv.tv_usec = 10000;
 
 		err = select(cfd+1, &rfds, NULL, NULL, &tv);
-                if (err < 0)
+		if (err < 0)
 			return (NULL);
 
 		/* Determine if its time to push screen; ~24hz */
@@ -958,8 +961,11 @@ sse42_supported(void)
 int
 rfb_init(char *hostname, int port, int wait, char *password)
 {
+	int e;
+	char servname[6];
 	struct rfb_softc *rc;
-	struct sockaddr_in sin;
+	struct addrinfo *ai;
+	struct addrinfo hints;
 	int on = 1;
 #ifndef WITHOUT_CAPSICUM
 	cap_rights_t rights;
@@ -976,29 +982,43 @@ rfb_init(char *hostname, int port, int wait, char *password)
 
 	rc->password = password;
 
-	rc->sfd = socket(AF_INET, SOCK_STREAM, 0);
+	snprintf(servname, sizeof(servname), "%d", port ? port : 5900);
+
+	if (!hostname || strlen(hostname) == 0)
+#if defined(INET)
+		hostname = "127.0.0.1";
+#elif defined(INET6)
+		hostname = "[::1]";
+#endif
+
+	memset(&hints, 0, sizeof(hints));
+	hints.ai_family = AF_UNSPEC;
+	hints.ai_socktype = SOCK_STREAM;
+	hints.ai_flags = AI_NUMERICHOST | AI_NUMERICSERV | AI_PASSIVE;
+
+	if ((e = getaddrinfo(hostname, servname, &hints, &ai)) != 0) {
+		fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(e));
+		return(-1);
+	}
+
+	rc->sfd = socket(ai->ai_family, ai->ai_socktype, 0);
 	if (rc->sfd < 0) {
 		perror("socket");
+		freeaddrinfo(ai);
 		return (-1);
 	}
 
 	setsockopt(rc->sfd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on));
 
-	sin.sin_len = sizeof(sin);
-	sin.sin_family = AF_INET;
-	sin.sin_port = port ? htons(port) : htons(5900);
-	if (hostname && strlen(hostname) > 0)
-		inet_pton(AF_INET, hostname, &(sin.sin_addr));
-	else
-		sin.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-
-	if (bind(rc->sfd, (struct sockaddr *)&sin, sizeof(sin)) < 0) {
+	if (bind(rc->sfd, ai->ai_addr, ai->ai_addrlen) < 0) {
 		perror("bind");
+		freeaddrinfo(ai);
 		return (-1);
 	}
 
 	if (listen(rc->sfd, 1) < 0) {
 		perror("listen");
+		freeaddrinfo(ai);
 		return (-1);
 	}
 
@@ -1026,5 +1046,6 @@ rfb_init(char *hostname, int port, int wait, char *password)
 		pthread_mutex_unlock(&rc->mtx);
 	}
 
+	freeaddrinfo(ai);
 	return (0);
 }

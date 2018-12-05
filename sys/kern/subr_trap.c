@@ -145,6 +145,11 @@ userret(struct thread *td, struct trapframe *frame)
 	 */
 	if (p->p_flag & P_PROFIL)
 		addupc_task(td, TRAPF_PC(frame), td->td_pticks * psratio);
+
+#ifdef HWPMC_HOOKS
+	if (PMC_THREAD_HAS_SAMPLES(td))
+		PMC_CALL_HOOK(td, PMC_FN_THR_USERRET, NULL);
+#endif
 	/*
 	 * Let the scheduler adjust our priority etc.
 	 */
@@ -193,16 +198,8 @@ userret(struct thread *td, struct trapframe *frame)
 	    (td->td_vnet_lpush != NULL) ? td->td_vnet_lpush : "N/A"));
 #endif
 #ifdef RACCT
-	if (racct_enable && p->p_throttled != 0) {
-		PROC_LOCK(p);
-		while (p->p_throttled != 0) {
-			msleep(p->p_racct, &p->p_mtx, 0, "racct",
-			    p->p_throttled < 0 ? 0 : p->p_throttled);
-			if (p->p_throttled > 0)
-				p->p_throttled = 0;
-		}
-		PROC_UNLOCK(p);
-	}
+	if (__predict_false(racct_enable && p->p_throttled != 0))
+		racct_proc_throttled(p);
 #endif
 }
 

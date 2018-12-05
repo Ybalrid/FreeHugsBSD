@@ -172,9 +172,9 @@ regulator_shutdown(void *dummy)
 	REG_TOPO_SLOCK();
 	TUNABLE_INT_FETCH("hw.regulator.disable_unused", &disable);
 	TAILQ_FOREACH(entry, &regnode_list, reglist_link) {
-		if (entry->std_param.always_on == 0 && disable) {
+		if (!entry->std_param.always_on && disable) {
 			if (bootverbose)
-				printf("regulator: shuting down %s\n",
+				printf("regulator: shutting down %s\n",
 				    entry->name);
 			ret = regnode_status(entry, &status);
 			if (ret == 0 && status == REGULATOR_STATUS_ENABLED)
@@ -379,15 +379,15 @@ regnode_create(device_t pdev, regnode_class_t regnode_class,
 	    OID_AUTO, "enable_cnt",
 	    CTLFLAG_RD, &regnode->enable_cnt, 0,
 	    "The regulator enable counter");
-	SYSCTL_ADD_INT(&regnode->sysctl_ctx,
+	SYSCTL_ADD_U8(&regnode->sysctl_ctx,
 	    SYSCTL_CHILDREN(regnode_oid),
 	    OID_AUTO, "boot_on",
-	    CTLFLAG_RD, (int *) &regnode->std_param.boot_on, 0,
+	    CTLFLAG_RD, (uint8_t *) &regnode->std_param.boot_on, 0,
 	    "Is enabled on boot");
-	SYSCTL_ADD_INT(&regnode->sysctl_ctx,
+	SYSCTL_ADD_U8(&regnode->sysctl_ctx,
 	    SYSCTL_CHILDREN(regnode_oid),
 	    OID_AUTO, "always_on",
-	    CTLFLAG_RD, (int *)&regnode->std_param.always_on, 0,
+	    CTLFLAG_RD, (uint8_t *)&regnode->std_param.always_on, 0,
 	    "Is always enabled");
 
 	SYSCTL_ADD_PROC(&regnode->sysctl_ctx,
@@ -595,8 +595,9 @@ regnode_disable(struct regnode *regnode)
 
 	REGNODE_XLOCK(regnode);
 	/* Disable regulator for each node in chain, starting from consumer. */
-	if ((regnode->enable_cnt == 1) &&
-	    ((regnode->flags & REGULATOR_FLAGS_NOT_DISABLE) == 0)) {
+	if (regnode->enable_cnt == 1 &&
+	    (regnode->flags & REGULATOR_FLAGS_NOT_DISABLE) == 0 &&
+	    !regnode->std_param.always_on) {
 		rv = REGNODE_ENABLE(regnode, false, &udelay);
 		if (rv != 0) {
 			REGNODE_UNLOCK(regnode);
@@ -636,7 +637,7 @@ regnode_stop(struct regnode *regnode, int depth)
 	/* Disable regulator for each node in chain, starting from consumer */
 	if ((regnode->enable_cnt == 0) &&
 	    ((regnode->flags & REGULATOR_FLAGS_NOT_DISABLE) == 0)) {
-		rv = REGNODE_ENABLE(regnode, false, &udelay);
+		rv = REGNODE_STOP(regnode, &udelay);
 		if (rv != 0) {
 			REGNODE_UNLOCK(regnode);
 			return (rv);
@@ -648,7 +649,7 @@ regnode_stop(struct regnode *regnode, int depth)
 	rv = regnode_resolve_parent(regnode);
 	if (rv != 0)
 		return (rv);
-	if (regnode->parent != NULL)
+	if (regnode->parent != NULL && regnode->parent->enable_cnt == 0)
 		rv = regnode_stop(regnode->parent, depth + 1);
 	return (rv);
 }
@@ -1048,10 +1049,10 @@ regulator_parse_ofw_stdparam(device_t pdev, phandle_t node,
 		par->enable_delay = 0;
 
 	if (OF_hasprop(node, "regulator-boot-on"))
-		par->boot_on = 1;
+		par->boot_on = true;
 
 	if (OF_hasprop(node, "regulator-always-on"))
-		par->always_on = 1;
+		par->always_on = true;
 
 	if (OF_hasprop(node, "enable-active-high"))
 		par->enable_active_high = 1;

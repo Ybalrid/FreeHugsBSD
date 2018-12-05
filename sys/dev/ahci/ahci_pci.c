@@ -69,7 +69,8 @@ static const struct {
 	/* Not sure SB8x0/SB9x0 needs this quirk. Be conservative though */
 	{0x43951002, 0x00, "AMD SB8x0/SB9x0",	AHCI_Q_ATI_PMP_BUG},
 	{0x43b61022, 0x00, "AMD X399",		0},
-	{0x43b71022, 0x00, "AMD 300 Series",	0},
+	{0x43b51022, 0x00, "AMD 300 Series",	0}, /* X370 */
+	{0x43b71022, 0x00, "AMD 300 Series",	0}, /* B350 */
 	{0x78001022, 0x00, "AMD Hudson-2",	0},
 	{0x78011022, 0x00, "AMD Hudson-2",	0},
 	{0x78021022, 0x00, "AMD Hudson-2",	0},
@@ -349,6 +350,7 @@ static const struct {
 	{0x01861039, 0x00, "SiS 968",		0},
 	{0xa01c177d, 0x00, "ThunderX",		AHCI_Q_ABAR0|AHCI_Q_1MSI},
 	{0x00311c36, 0x00, "Annapurna",		AHCI_Q_FORCE_PI|AHCI_Q_RESTORE_CAP|AHCI_Q_NOMSIX},
+	{0x1600144d, 0x00, "Samsung",		AHCI_Q_NOMSI},
 	{0x00000000, 0x00, NULL,		0}
 };
 
@@ -664,6 +666,9 @@ static driver_t ahci_driver = {
         sizeof(struct ahci_controller)
 };
 DRIVER_MODULE(ahci, pci, ahci_driver, ahci_devclass, NULL, NULL);
+/* Also matches class / subclass / progid XXX need to add when we have masking support */
+MODULE_PNP_INFO("W32:vendor/device", pci, ahci, ahci_ids,
+    nitems(ahci_ids) - 1);
 static device_method_t ahci_ata_methods[] = {
 	DEVMETHOD(device_probe,     ahci_ata_probe),
 	DEVMETHOD(device_attach,    ahci_pci_attach),

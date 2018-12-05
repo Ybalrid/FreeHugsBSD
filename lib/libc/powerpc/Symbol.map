@@ -43,9 +43,7 @@ FBSD_1.3 {
 
 FBSDprivate_1.0 {
 	/* PSEUDO syscalls */
-	__sys_getlogin;
 	_getlogin;
-	__sys_exit;
 
 	_set_tp;
 	_fpgetsticky;
@@ -54,5 +52,4 @@ FBSDprivate_1.0 {
 	signalcontext;
 	__signalcontext;
 	__syncicache;
-	_end;
 };

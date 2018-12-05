@@ -77,7 +77,7 @@
 #define	SYS_sbrk	69
 #define	SYS_sstk	70
 				/* 71 is old mmap */
-#define	SYS_vadvise	72
+#define	SYS_freebsd11_vadvise	72
 #define	SYS_munmap	73
 #define	SYS_mprotect	74
 #define	SYS_madvise	75
@@ -175,6 +175,10 @@
 #define	SYS_setgid	181
 #define	SYS_setegid	182
 #define	SYS_seteuid	183
+				/* 184 is obsolete lfs_bmapv */
+				/* 185 is obsolete lfs_markv */
+				/* 186 is obsolete lfs_segclean */
+				/* 187 is obsolete lfs_segwait */
 #define	SYS_freebsd11_stat	188
 #define	SYS_freebsd11_fstat	189
 #define	SYS_freebsd11_lstat	190
@@ -198,6 +202,7 @@
 #define	SYS_freebsd7___semctl	220
 #define	SYS_semget	221
 #define	SYS_semop	222
+				/* 223 is obsolete semconfig */
 #define	SYS_freebsd7_msgctl	224
 #define	SYS_msgget	225
 #define	SYS_msgsnd	226
@@ -231,9 +236,9 @@
 #define	SYS_lio_listio	257
 #define	SYS_freebsd11_getdents	272
 #define	SYS_lchmod	274
-#define	SYS_netbsd_lchown	275
+				/* 275 is obsolete netbsd_lchown */
 #define	SYS_lutimes	276
-#define	SYS_netbsd_msync	277
+				/* 277 is obsolete netbsd_msync */
 #define	SYS_freebsd11_nstat	278
 #define	SYS_freebsd11_nfstat	279
 #define	SYS_freebsd11_nlstat	280
@@ -306,13 +311,25 @@
 #define	SYS_getresgid	361
 #define	SYS_kqueue	362
 #define	SYS_freebsd11_kevent	363
+				/* 364 is obsolete __cap_get_proc */
+				/* 365 is obsolete __cap_set_proc */
+				/* 366 is obsolete __cap_get_fd */
+				/* 367 is obsolete __cap_get_file */
+				/* 368 is obsolete __cap_set_fd */
+				/* 369 is obsolete __cap_set_file */
 #define	SYS_extattr_set_fd	371
 #define	SYS_extattr_get_fd	372
 #define	SYS_extattr_delete_fd	373
 #define	SYS___setugid	374
+				/* 375 is obsolete nfsclnt */
 #define	SYS_eaccess	376
 #define	SYS_afs3_syscall	377
 #define	SYS_nmount	378
+				/* 379 is obsolete kse_exit */
+				/* 380 is obsolete kse_wakeup */
+				/* 381 is obsolete kse_create */
+				/* 382 is obsolete kse_thr_interrupt */
+				/* 383 is obsolete kse_release */
 #define	SYS___mac_get_proc	384
 #define	SYS___mac_set_proc	385
 #define	SYS___mac_get_fd	386
@@ -363,6 +380,7 @@
 #define	SYS_extattr_list_fd	437
 #define	SYS_extattr_list_file	438
 #define	SYS_extattr_list_link	439
+				/* 440 is obsolete kse_switchin */
 #define	SYS_ksem_timedwait	441
 #define	SYS_thr_suspend	442
 #define	SYS_thr_wake	443
@@ -465,6 +483,8 @@
 #define	SYS_ppoll	545
 #define	SYS_futimens	546
 #define	SYS_utimensat	547
+				/* 548 is obsolete numa_getaffinity */
+				/* 549 is obsolete numa_setaffinity */
 #define	SYS_fdatasync	550
 #define	SYS_fstat	551
 #define	SYS_fstatat	552

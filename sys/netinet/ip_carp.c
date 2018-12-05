@@ -187,36 +187,44 @@ static int proto_reg[] = {-1, -1};
  */
 
 /* Accept incoming CARP packets. */
-static VNET_DEFINE(int, carp_allow) = 1;
+VNET_DEFINE_STATIC(int, carp_allow) = 1;
 #define	V_carp_allow	VNET(carp_allow)
 
+/* Set DSCP in outgoing CARP packets. */
+VNET_DEFINE_STATIC(int, carp_dscp) = 56;
+#define	V_carp_dscp	VNET(carp_dscp)
+
 /* Preempt slower nodes. */
-static VNET_DEFINE(int, carp_preempt) = 0;
+VNET_DEFINE_STATIC(int, carp_preempt) = 0;
 #define	V_carp_preempt	VNET(carp_preempt)
 
 /* Log level. */
-static VNET_DEFINE(int, carp_log) = 1;
+VNET_DEFINE_STATIC(int, carp_log) = 1;
 #define	V_carp_log	VNET(carp_log)
 
 /* Global advskew demotion. */
-static VNET_DEFINE(int, carp_demotion) = 0;
+VNET_DEFINE_STATIC(int, carp_demotion) = 0;
 #define	V_carp_demotion	VNET(carp_demotion)
 
 /* Send error demotion factor. */
-static VNET_DEFINE(int, carp_senderr_adj) = CARP_MAXSKEW;
+VNET_DEFINE_STATIC(int, carp_senderr_adj) = CARP_MAXSKEW;
 #define	V_carp_senderr_adj	VNET(carp_senderr_adj)
 
 /* Iface down demotion factor. */
-static VNET_DEFINE(int, carp_ifdown_adj) = CARP_MAXSKEW;
+VNET_DEFINE_STATIC(int, carp_ifdown_adj) = CARP_MAXSKEW;
 #define	V_carp_ifdown_adj	VNET(carp_ifdown_adj)
 
 static int carp_allow_sysctl(SYSCTL_HANDLER_ARGS);
+static int carp_dscp_sysctl(SYSCTL_HANDLER_ARGS);
 static int carp_demote_adj_sysctl(SYSCTL_HANDLER_ARGS);
 
 SYSCTL_NODE(_net_inet, IPPROTO_CARP,	carp,	CTLFLAG_RW, 0,	"CARP");
 SYSCTL_PROC(_net_inet_carp, OID_AUTO, allow,
     CTLFLAG_VNET | CTLTYPE_INT | CTLFLAG_RW, 0, 0, carp_allow_sysctl, "I",
     "Accept incoming CARP packets");
+SYSCTL_PROC(_net_inet_carp, OID_AUTO, dscp,
+    CTLFLAG_VNET | CTLTYPE_INT | CTLFLAG_RW, 0, 0, carp_dscp_sysctl, "I",
+    "DSCP value for carp packets");
 SYSCTL_INT(_net_inet_carp, OID_AUTO, preempt, CTLFLAG_VNET | CTLFLAG_RW,
     &VNET_NAME(carp_preempt), 0, "High-priority backup preemption mode");
 SYSCTL_INT(_net_inet_carp, OID_AUTO, log, CTLFLAG_VNET | CTLFLAG_RW,
@@ -933,7 +941,7 @@ carp_send_ad_locked(struct carp_softc *sc)
 		ip = mtod(m, struct ip *);
 		ip->ip_v = IPVERSION;
 		ip->ip_hl = sizeof(*ip) >> 2;
-		ip->ip_tos = IPTOS_LOWDELAY;
+		ip->ip_tos = V_carp_dscp << IPTOS_DSCP_OFFSET;
 		ip->ip_len = htons(len);
 		ip->ip_off = htons(IP_DF);
 		ip->ip_ttl = CARP_DFLTTL;
@@ -983,6 +991,10 @@ carp_send_ad_locked(struct carp_softc *sc)
 		ip6 = mtod(m, struct ip6_hdr *);
 		bzero(ip6, sizeof(*ip6));
 		ip6->ip6_vfc |= IPV6_VERSION;
+		/* Traffic class isn't defined in ip6 struct instead
+		 * it gets offset into flowid field */
+		ip6->ip6_flow |= htonl(V_carp_dscp << (IPV6_FLOWLABEL_LEN +
+		    IPTOS_DSCP_OFFSET));
 		ip6->ip6_hlim = CARP_DFLTTL;
 		ip6->ip6_nxt = IPPROTO_CARP;
 
@@ -1411,6 +1423,7 @@ carp_multicast_setup(struct carp_if *cif, sa_family_t sa)
 			free(im6o->im6o_membership, M_CARP);
 			break;
 		}
+		in6m_acquire(in6m);
 		im6o->im6o_membership[0] = in6m;
 		im6o->im6o_num_memberships++;
 
@@ -1432,6 +1445,7 @@ carp_multicast_setup(struct carp_if *cif, sa_family_t sa)
 			free(im6o->im6o_membership, M_CARP);
 			break;
 		}
+		in6m_acquire(in6m);
 		im6o->im6o_membership[1] = in6m;
 		im6o->im6o_num_memberships++;
 		break;
@@ -2102,6 +2116,24 @@ carp_allow_sysctl(SYSCTL_HANDLER_ARGS)
 }
 
 static int
+carp_dscp_sysctl(SYSCTL_HANDLER_ARGS)
+{
+	int new, error;
+
+	new = V_carp_dscp;
+	error = sysctl_handle_int(oidp, &new, 0, req);
+	if (error || !req->newptr)
+		return (error);
+
+	if (new < 0 || new > 63)
+		return (EINVAL);
+
+	V_carp_dscp = new;
+
+	return (0);
+}
+
+static int
 carp_demote_adj_sysctl(SYSCTL_HANDLER_ARGS)
 {
 	int new, error;
@@ -2142,6 +2174,21 @@ static struct protosw in6_carp_protosw = {
 	.pr_ctloutput =		rip6_ctloutput,
 	.pr_usrreqs =		&rip6_usrreqs
 };
+#endif
+
+#ifdef VIMAGE
+#if defined(__i386__)
+/*
+ * XXX This is a hack to work around an absolute relocation outside
+ * set_vnet by one (on the stop symbol) for carpstats.  Add a dummy variable
+ * to the end of the file in the hope that the linker will just keep the
+ * order (as it seems to do at the moment).  It is understood to be fragile.
+ * See PR 230857 for a longer discussion of the problem and the referenced
+ * review for possible alternate solutions.  Each is a hack; we just need
+ * the least intrusive one for the next release.
+ */
+VNET_DEFINE(char, carp_zzz) = 0xde;
+#endif
 #endif
 
 static void

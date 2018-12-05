@@ -47,51 +47,73 @@ __FBSDID("$FreeBSD$");
 
 #include "nvmecontrol.h"
 
+SET_DECLARE(top, struct nvme_function);
 
-static struct nvme_function funcs[] = {
-	{"devlist",	devlist,	DEVLIST_USAGE},
-	{"identify",	identify,	IDENTIFY_USAGE},
-	{"perftest",	perftest,	PERFTEST_USAGE},
-	{"reset",	reset,		RESET_USAGE},
-	{"logpage",	logpage,	LOGPAGE_USAGE},
-	{"firmware",	firmware,	FIRMWARE_USAGE},
-	{"format",	format,		FORMAT_USAGE},
-	{"power",	power,		POWER_USAGE},
-	{"wdc",		wdc,		WDC_USAGE},
-	{"ns",		ns,		NS_USAGE},
-	{NULL,		NULL,		NULL},
-};
+static void
+print_usage(const struct nvme_function *f)
+{
+	const char *cp;
+	char ch;
+	bool need_prefix = true;
 
-void
-gen_usage(struct nvme_function *f)
+	cp = f->usage;
+	while (*cp) {
+		ch = *cp++;
+		if (need_prefix) {
+			if (ch != ' ')
+				fputs("        nvmecontrol ", stderr);
+			else
+				fputs("                    ", stderr);
+		}
+		fputc(ch, stderr);
+		need_prefix = (ch == '\n');
+	}
+	if (!need_prefix)
+		fputc('\n', stderr);
+}
+
+static void
+gen_usage_set(struct nvme_function **f, struct nvme_function **flimit)
 {
 
 	fprintf(stderr, "usage:\n");
-	while (f->name != NULL) {
-		fprintf(stderr, "%s", f->usage);
+	while (f < flimit) {
+		print_usage(*f);
 		f++;
 	}
 	exit(1);
 }
 
 void
-dispatch(int argc, char *argv[], struct nvme_function *tbl)
+usage(const struct nvme_function *f)
 {
-	struct nvme_function *f = tbl;
+
+	fprintf(stderr, "usage:\n");
+	print_usage(f);
+	exit(1);
+}
+
+void
+dispatch_set(int argc, char *argv[], struct nvme_function **tbl,
+    struct nvme_function **tbl_limit)
+{
+	struct nvme_function **f = tbl;
 
 	if (argv[1] == NULL) {
-		gen_usage(tbl);
+		gen_usage_set(tbl, tbl_limit);
 		return;
 	}
 
-	while (f->name != NULL) {
-		if (strcmp(argv[1], f->name) == 0)
-			f->fn(argc-1, &argv[1]);
+	while (f < tbl_limit) {
+		if (strcmp(argv[1], (*f)->name) == 0) {
+			(*f)->fn(*f, argc-1, &argv[1]);
+			return;
+		}
 		f++;
 	}
 
 	fprintf(stderr, "Unknown command: %s\n", argv[1]);
-	gen_usage(tbl);
+	gen_usage_set(tbl, tbl_limit);
 }
 
 static void
@@ -148,7 +170,7 @@ read_controller_data(int fd, struct nvme_controller_data *cdata)
 	struct nvme_pt_command	pt;
 
 	memset(&pt, 0, sizeof(pt));
-	pt.cmd.opc_fuse = NVME_CMD_SET_OPC(NVME_OPC_IDENTIFY);
+	pt.cmd.opc = NVME_OPC_IDENTIFY;
 	pt.cmd.cdw10 = htole32(1);
 	pt.buf = cdata;
 	pt.len = sizeof(*cdata);
@@ -170,7 +192,7 @@ read_namespace_data(int fd, uint32_t nsid, struct nvme_namespace_data *nsdata)
 	struct nvme_pt_command	pt;
 
 	memset(&pt, 0, sizeof(pt));
-	pt.cmd.opc_fuse = NVME_CMD_SET_OPC(NVME_OPC_IDENTIFY);
+	pt.cmd.opc = NVME_OPC_IDENTIFY;
 	pt.cmd.nsid = htole32(nsid);
 	pt.buf = nsdata;
 	pt.len = sizeof(*nsdata);
@@ -243,9 +265,9 @@ main(int argc, char *argv[])
 {
 
 	if (argc < 2)
-		gen_usage(funcs);
+		gen_usage_set(SET_BEGIN(top), SET_LIMIT(top));
 
-	dispatch(argc, argv, funcs);
+	DISPATCH(argc, argv, top);
 
 	return (0);
 }

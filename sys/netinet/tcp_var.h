@@ -46,12 +46,15 @@
 #if defined(_KERNEL) || defined(_WANT_TCPCB)
 /* TCP segment queue entry */
 struct tseg_qent {
-	LIST_ENTRY(tseg_qent) tqe_q;
+	TAILQ_ENTRY(tseg_qent) tqe_q;
+	struct	mbuf   *tqe_m;		/* mbuf contains packet */
+	struct  mbuf   *tqe_last;	/* last mbuf in chain */
+	tcp_seq tqe_start;		/* TCP Sequence number start */
 	int	tqe_len;		/* TCP segment data length */
-	struct	tcphdr *tqe_th;		/* a pointer to tcp header */
-	struct	mbuf	*tqe_m;		/* mbuf contains packet */
+	uint32_t tqe_flags;		/* The flags from the th->th_flags */
+	uint32_t tqe_mbuf_cnt;		/* Count of mbuf overhead */
 };
-LIST_HEAD(tsegqe_head, tseg_qent);
+TAILQ_HEAD(tsegqe_head, tseg_qent);
 
 struct sackblk {
 	tcp_seq start;		/* start seq no. of sack block */
@@ -79,6 +82,8 @@ struct sackhint {
 	uint64_t	_pad[1];	/* TBD */
 };
 
+#define SEGQ_EMPTY(tp) TAILQ_EMPTY(&(tp)->t_segq)
+
 STAILQ_HEAD(tcp_log_stailq, tcp_log_mem);
 
 /*
@@ -93,8 +98,11 @@ struct tcpcb {
 	void	*t_fb_ptr;		/* Pointer to t_fb specific data */
 	uint32_t t_maxseg:24,		/* maximum segment size */
 		t_logstate:8;		/* State of "black box" logging */
-	uint32_t t_state:4,		/* state of this connection */
-		bits_spare : 24;
+	uint32_t t_port:16,		/* Tunneling (over udp) port */
+		t_state:4,		/* state of this connection */
+		t_idle_reduce : 1,
+		t_delayed_ack: 7,	/* Delayed ack variable */
+		bits_spare : 4;
 	u_int	t_flags;
 	tcp_seq	snd_una;		/* sent but unacknowledged */
 	tcp_seq	snd_max;		/* highest sequence number sent;
@@ -104,7 +112,7 @@ struct tcpcb {
 	tcp_seq	snd_up;			/* send urgent pointer */
 	uint32_t  snd_wnd;		/* send window */
 	uint32_t  snd_cwnd;		/* congestion-controlled window */
-	uint32_t cl1_spare; 		/* Spare to round out CL 1 */
+	uint32_t t_peakrate_thr; 	/* pre-calculated peak rate threshold */
 	/* Cache line 2 */
 	u_int32_t  ts_offset;		/* our timestamp offset */
 	u_int32_t	rfbuf_ts;	/* recv buffer autoscaling timestamp */
@@ -128,6 +136,7 @@ struct tcpcb {
 	/* Cache line 3 */
 	tcp_seq	rcv_up;			/* receive urgent pointer */
 	int	t_segqlen;		/* segment reassembly queue length */
+	uint32_t t_segqmbuflen;		/* Count of bytes mbufs on all entries */
 	struct	tsegqe_head t_segq;	/* segment reassembly queue */
 	struct mbuf      *t_in_pkt;
 	struct mbuf	 *t_tail_pkt;
@@ -189,6 +198,7 @@ struct tcpcb {
 	struct cc_var	*ccv;		/* congestion control specific vars */
 	struct osd	*osd;		/* storage for Khelp module data */
 	int	t_bytes_acked;		/* # bytes acked during current RTT */
+	u_int   t_maxunacktime;
 	u_int	t_keepinit;		/* time to establish connection */
 	u_int	t_keepidle;		/* time before keepalive probes begin */
 	u_int	t_keepintvl;		/* interval between keepalives */
@@ -260,12 +270,11 @@ struct tcp_function_block {
 	int	(*tfb_tcp_output_wtime)(struct tcpcb *, const struct timeval *);
 	void	(*tfb_tcp_do_segment)(struct mbuf *, struct tcphdr *,
 			    struct socket *, struct tcpcb *,
-			    int, int, uint8_t,
-			    int);
+		        int, int, uint8_t);
 	void	(*tfb_tcp_hpts_do_segment)(struct mbuf *, struct tcphdr *,
 			    struct socket *, struct tcpcb *,
 			    int, int, uint8_t,
-			    int, int, struct timeval *);
+			    int, struct timeval *);
 	int     (*tfb_tcp_ctloutput)(struct socket *so, struct sockopt *sopt,
 			    struct inpcb *inp, struct tcpcb *tp);
 	/* Optional memory allocation/free routine */
@@ -361,6 +370,7 @@ TAILQ_HEAD(tcp_funchead, tcp_function);
 #define	TF2_PLPMTU_PMTUD	0x00000002 /* Allowed to attempt PLPMTUD. */
 #define	TF2_PLPMTU_MAXSEGSNT	0x00000004 /* Last seg sent was full seg. */
 #define	TF2_LOG_AUTO		0x00000008 /* Session is auto-logging. */
+#define TF2_DROP_AF_DATA 	0x00000010 /* Drop after all data ack'd */
 
 /*
  * Structure to hold TCP options that are only used during segment
@@ -649,6 +659,11 @@ struct tcp_hhook_data {
 	int		tso;
 	tcp_seq		curack;
 };
+#ifdef TCP_HHOOK
+void hhook_run_tcp_est_out(struct tcpcb *tp,
+	struct tcphdr *th, struct tcpopt *to,
+	uint32_t len, int tso);
+#endif
 #endif
 
 /*
@@ -668,7 +683,7 @@ struct tcp_hhook_data {
  */
 #if defined(_NETINET_IN_PCB_H_) && defined(_SYS_SOCKETVAR_H_)
 struct xtcpcb {
-	size_t		xt_len;		/* length of this structure */
+	ksize_t	xt_len;		/* length of this structure */
 	struct xinpcb	xt_inp;
 	char		xt_stack[TCP_FUNCTION_NAME_LEN_MAX];	/* (s) */
 	char		xt_logid[TCP_LOG_ID_LEN];	/* (s) */
@@ -801,6 +816,9 @@ VNET_DECLARE(struct inpcbinfo, tcbinfo);
 #define	V_tcp_sack_maxholes		VNET(tcp_sack_maxholes)
 #define	V_tcp_sc_rst_sock_fail		VNET(tcp_sc_rst_sock_fail)
 #define	V_tcp_sendspace			VNET(tcp_sendspace)
+#define	V_tcp_udp_tunneling_overhead	VNET(tcp_udp_tunneling_overhead)
+#define	V_tcp_udp_tunneling_port	VNET(tcp_udp_tunneling_port)
+
 
 #ifdef TCP_HHOOK
 VNET_DECLARE(struct hhook_head *, tcp_hhh[HHOOK_TCP_LAST + 1]);
@@ -825,7 +843,7 @@ char	*tcp_log_addrs(struct in_conninfo *, struct tcphdr *, void *,
 	    const void *);
 char	*tcp_log_vain(struct in_conninfo *, struct tcphdr *, void *,
 	    const void *);
-int	 tcp_reass(struct tcpcb *, struct tcphdr *, int *, struct mbuf *);
+int	 tcp_reass(struct tcpcb *, struct tcphdr *, tcp_seq *, int *, struct mbuf *);
 void	 tcp_reass_global_init(void);
 void	 tcp_reass_flush(struct tcpcb *);
 void	 tcp_dooptions(struct tcpopt *, u_char *, int, int);
@@ -849,8 +867,7 @@ int	 tcp_input(struct mbuf **, int *, int);
 int	 tcp_autorcvbuf(struct mbuf *, struct tcphdr *, struct socket *,
 	    struct tcpcb *, int);
 void	 tcp_do_segment(struct mbuf *, struct tcphdr *,
-			struct socket *, struct tcpcb *, int, int, uint8_t,
-			int);
+			struct socket *, struct tcpcb *, int, int, uint8_t);
 
 int register_tcp_functions(struct tcp_function_block *blk, int wait);
 int register_tcp_functions_as_names(struct tcp_function_block *blk,
@@ -893,9 +910,12 @@ struct tcptemp *
 	 tcpip_maketemplate(struct inpcb *);
 void	 tcpip_fillheaders(struct inpcb *, void *, void *);
 void	 tcp_timer_activate(struct tcpcb *, uint32_t, u_int);
+int	 tcp_timer_suspend(struct tcpcb *, uint32_t);
+void	 tcp_timers_unsuspend(struct tcpcb *, uint32_t);
 int	 tcp_timer_active(struct tcpcb *, uint32_t);
 void	 tcp_timer_stop(struct tcpcb *, uint32_t);
 void	 tcp_trace(short, short, struct tcpcb *, void *, struct tcphdr *, int);
+int	 inp_to_cpuid(struct inpcb *inp);
 /*
  * All tcp_hc_* functions are IPv4 and IPv6 (via in_conninfo)
  */
@@ -909,7 +929,9 @@ void	 tcp_hc_updatemtu(struct in_conninfo *, uint32_t);
 void	 tcp_hc_update(struct in_conninfo *, struct hc_metrics_lite *);
 
 extern	struct pr_usrreqs tcp_usrreqs;
-tcp_seq tcp_new_isn(struct tcpcb *);
+
+uint32_t tcp_new_ts_offset(struct in_conninfo *);
+tcp_seq	 tcp_new_isn(struct in_conninfo *);
 
 int	 tcp_sack_doack(struct tcpcb *, struct tcpopt *, tcp_seq);
 void	 tcp_update_sack_list(struct tcpcb *tp, tcp_seq rcv_laststart, tcp_seq rcv_lastend);
@@ -921,6 +943,10 @@ void	 tcp_free_sackholes(struct tcpcb *tp);
 int	 tcp_newreno(struct tcpcb *, struct tcphdr *);
 int	 tcp_compute_pipe(struct tcpcb *);
 void	 tcp_sndbuf_autoscale(struct tcpcb *, struct socket *, uint32_t);
+struct mbuf *
+	 tcp_m_copym(struct mbuf *m, int32_t off0, int32_t *plen,
+	   int32_t seglimit, int32_t segsize, struct sockbuf *sb);
+
 
 static inline void
 tcp_fields_to_host(struct tcphdr *th)

@@ -76,8 +76,7 @@
 	uint32_t pc_pcid_gen;						\
 	uint32_t pc_smp_tlb_done;	/* TLB op acknowledgement */	\
 	uint32_t pc_ibpb_set;						\
-	char	__pad[216]		/* be divisor of PAGE_SIZE	\
-					   after cache alignment */
+	char	__pad[3288]		/* pad to UMA_PCPU_ALLOC_SIZE */
 
 #define	PC_DBREG_CMD_NONE	0
 #define	PC_DBREG_CMD_LOAD	1
@@ -228,8 +227,7 @@ __curthread(void)
 {
 	struct thread *td;
 
-	__asm("movq %%gs:%1,%0" : "=r" (td)
-	    : "m" (*(char *)OFFSETOF_CURTHREAD));
+	__asm("movq %%gs:%P1,%0" : "=r" (td) : "n" (OFFSETOF_CURTHREAD));
 	return (td);
 }
 #ifdef __clang__
@@ -243,7 +241,7 @@ __curpcb(void)
 {
 	struct pcb *pcb;
 
-	__asm("movq %%gs:%1,%0" : "=r" (pcb) : "m" (*(char *)OFFSETOF_CURPCB));
+	__asm("movq %%gs:%P1,%0" : "=r" (pcb) : "n" (OFFSETOF_CURPCB));
 	return (pcb);
 }
 #define	curpcb		(__curpcb())

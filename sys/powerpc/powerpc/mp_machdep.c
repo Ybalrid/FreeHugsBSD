@@ -100,7 +100,11 @@ machdep_ap_bootstrap(void)
 	/* Serialize console output and AP count increment */
 	mtx_lock_spin(&ap_boot_mtx);
 	ap_awake++;
-	printf("SMP: AP CPU #%d launched\n", PCPU_GET(cpuid));
+	if (bootverbose)
+		printf("SMP: AP CPU #%d launched\n", PCPU_GET(cpuid));
+	else
+		printf("%s%d%s", ap_awake == 2 ? "Launching APs: " : "",
+		    PCPU_GET(cpuid), ap_awake == mp_ncpus ? "\n" : " ");
 	mtx_unlock_spin(&ap_boot_mtx);
 
 	while(smp_started == 0)
@@ -168,8 +172,8 @@ cpu_mp_start(void)
 			void *dpcpu;
 
 			pc = &__pcpu[cpu.cr_cpuid];
-			dpcpu = (void *)kmem_malloc(kernel_arena, DPCPU_SIZE,
-			    M_WAITOK | M_ZERO);
+			dpcpu = (void *)kmem_malloc(DPCPU_SIZE, M_WAITOK |
+			    M_ZERO);
 			pcpu_init(pc, cpu.cr_cpuid, sizeof(*pc));
 			dpcpu_init(dpcpu, cpu.cr_cpuid);
 		} else {

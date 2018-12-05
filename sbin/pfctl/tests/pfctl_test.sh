@@ -22,7 +22,7 @@ pftests="0001 0002 0003 0004 0005 0006 0007 0008 0009 0010 0011 0012
 0032 0034 0035 0038 0039 0040 0041 0047 0048 0049 0050 0052 0053 0055
 0056 0057 0060 0061 0065 0067 0069 0070 0071 0072 0074 0075 0077 0078
 0079 0081 0082 0084 0085 0087 0088 0089 0090 0091 0092 0094 0095 0096
-0097 0098 0100 0101 0102 0104 1001 1002 1003 1004"
+0097 0098 0100 0101 0102 0104 1001 1002 1003 1004 1005"
 
 . $(atf_get_srcdir)/files/pfctl_test_descr.sh
 
@@ -30,6 +30,7 @@ for i in ${pftests} ; do
     atf_test_case "pf${i}"
     eval "pf${i}_head () { atf_set descr \"$(pf${i}_descr)\" ; }"
     eval "pf${i}_body () { \
+              kldstat -m pf || atf_skip \"pf(4) is not loaded\" && \
               cd $(atf_get_srcdir)/files && \
               atf_check -o file:pf${i}.ok \
                   pfctl -o none -nvf - < pf${i}.in ; }"

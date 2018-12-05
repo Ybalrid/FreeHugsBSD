@@ -487,7 +487,7 @@ template <class ELFT> void Writer<ELFT>::run() {
 
 static bool shouldKeepInSymtab(SectionBase *Sec, StringRef SymName,
                                const Symbol &B) {
-  if (B.isFile() || B.isSection())
+  if (B.isSection())
     return false;
 
   // If sym references a section in a discarded group, don't keep it.
@@ -1400,8 +1400,11 @@ template <class ELFT> void Writer<ELFT>::finalizeSections() {
   applySynthetic({InX::EhFrame},
                  [](SyntheticSection *SS) { SS->finalizeContents(); });
 
-  for (Symbol *S : Symtab->getSymbols())
+  for (Symbol *S : Symtab->getSymbols()) {
     S->IsPreemptible |= computeIsPreemptible(*S);
+    if (S->isGnuIFunc() && Config->ZIfuncnoplt)
+      S->ExportDynamic = true;
+  }
 
   // Scan relocations. This must be done after every symbol is declared so that
   // we can correctly decide if a dynamic relocation is needed.

@@ -117,6 +117,11 @@ struct bpf_if {
 
 CTASSERT(offsetof(struct bpf_if, bif_ext) == 0);
 
+#define BPFIF_RLOCK(bif)	rw_rlock(&(bif)->bif_lock)
+#define BPFIF_RUNLOCK(bif)	rw_runlock(&(bif)->bif_lock)
+#define BPFIF_WLOCK(bif)	rw_wlock(&(bif)->bif_lock)
+#define BPFIF_WUNLOCK(bif)	rw_wunlock(&(bif)->bif_lock)
+
 #if defined(DEV_BPF) || defined(NETGRAPH_BPF)
 
 #define PRINET  26			/* interruptible */
@@ -208,7 +213,7 @@ SYSCTL_INT(_net_bpf, OID_AUTO, zerocopy_enable, CTLFLAG_RW,
 static SYSCTL_NODE(_net_bpf, OID_AUTO, stats, CTLFLAG_MPSAFE | CTLFLAG_RW,
     bpf_stats_sysctl, "bpf statistics portal");
 
-static VNET_DEFINE(int, bpf_optimize_writers) = 0;
+VNET_DEFINE_STATIC(int, bpf_optimize_writers) = 0;
 #define	V_bpf_optimize_writers VNET(bpf_optimize_writers)
 SYSCTL_INT(_net_bpf, OID_AUTO, optimize_writers, CTLFLAG_VNET | CTLFLAG_RW,
     &VNET_NAME(bpf_optimize_writers), 0,
@@ -1895,8 +1900,13 @@ bpf_setf(struct bpf_d *d, struct bpf_program *fp, u_long cmd)
 			return (EINVAL);
 		}
 #ifdef BPF_JITTER
-		/* Filter is copied inside fcode and is perfectly valid. */
-		jfunc = bpf_jitter(fcode, flen);
+		if (cmd != BIOCSETWF) {
+			/*
+			 * Filter is copied inside fcode and is
+			 * perfectly valid.
+			 */
+			jfunc = bpf_jitter(fcode, flen);
+		}
 #endif
 	}
 

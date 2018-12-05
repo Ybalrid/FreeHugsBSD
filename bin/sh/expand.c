@@ -623,10 +623,11 @@ static const char *
 subevalvar_misc(const char *p, struct nodelist **restrict argbackq,
     const char *var, int subtype, int startloc, int varflags)
 {
+	const char *end;
 	char *startp;
 	int amount;
 
-	p = argstr(p, argbackq, EXP_TILDE, NULL);
+	end = argstr(p, argbackq, EXP_TILDE, NULL);
 	STACKSTRNUL(expdest);
 	startp = stackblock() + startloc;
 
@@ -635,7 +636,7 @@ subevalvar_misc(const char *p, struct nodelist **restrict argbackq,
 		setvar(var, startp, 0);
 		amount = startp - expdest;
 		STADJUST(amount, expdest);
-		return p;
+		return end;
 
 	case VSQUESTION:
 		if (*p != CTLENDVAR) {
@@ -896,7 +897,7 @@ reprocess(int startloc, int flag, int subtype, int quoted,
 
 	startp = stackblock() + startloc;
 	len = expdest - startp;
-	if (len >= SIZE_MAX / 2)
+	if (len >= SIZE_MAX / 2 || len > PTRDIFF_MAX)
 		abort();
 	INTOFF;
 	if (len >= buflen) {
@@ -912,7 +913,7 @@ reprocess(int startloc, int flag, int subtype, int quoted,
 	INTON;
 	memcpy(buf, startp, len);
 	buf[len] = '\0';
-	STADJUST(-len, expdest);
+	STADJUST(-(ptrdiff_t)len, expdest);
 	for (zpos = 0;;) {
 		zlen = strlen(buf + zpos);
 		strtodest(buf + zpos, flag, subtype, quoted, dst);

@@ -189,6 +189,12 @@
 #define	CPUTPM1_SENSOR	0x00000001
 #define	CPUTPM1_TURBO	0x00000002
 #define	CPUTPM1_ARAT	0x00000004
+#define	CPUTPM1_HWP	0x00000080
+#define	CPUTPM1_HWP_NOTIFICATION	0x00000100
+#define	CPUTPM1_HWP_ACTIVITY_WINDOW	0x00000200
+#define	CPUTPM1_HWP_PERF_PREF	0x00000400
+#define	CPUTPM1_HWP_PKG	0x00000800
+#define	CPUTPM1_HWP_FLEXIBLE	0x00020000
 #define	CPUTPM2_EFFREQ	0x00000001
 
 /* Intel Processor Trace CPUID. */
@@ -427,13 +433,16 @@
  */
 #define	CPUID_STDEXT3_IBPB	0x04000000
 #define	CPUID_STDEXT3_STIBP	0x08000000
+#define	CPUID_STDEXT3_L1D_FLUSH	0x10000000
 #define	CPUID_STDEXT3_ARCH_CAP	0x20000000
 #define	CPUID_STDEXT3_SSBD	0x80000000
 
 /* MSR IA32_ARCH_CAP(ABILITIES) bits */
 #define	IA32_ARCH_CAP_RDCL_NO	0x00000001
 #define	IA32_ARCH_CAP_IBRS_ALL	0x00000002
-#define	IA32_ARCH_CAP_SSBD_NO	0x00000004
+#define	IA32_ARCH_CAP_RSBA	0x00000004
+#define	IA32_ARCH_CAP_SKIP_L1DFL_VMENTRY	0x00000008
+#define	IA32_ARCH_CAP_SSB_NO	0x00000010
 
 /*
  * CPUID manufacturers identifiers
@@ -478,6 +487,7 @@
 #define	MSR_IA32_EXT_CONFIG	0x0ee	/* Undocumented. Core Solo/Duo only */
 #define	MSR_MTRRcap		0x0fe
 #define	MSR_IA32_ARCH_CAP	0x10a
+#define	MSR_IA32_FLUSH_CMD	0x10b
 #define	MSR_BBL_CR_ADDR		0x116
 #define	MSR_BBL_CR_DECC		0x118
 #define	MSR_BBL_CR_CTL		0x119
@@ -537,7 +547,14 @@
 #define	MSR_DRAM_ENERGY_STATUS	0x619
 #define	MSR_PP0_ENERGY_STATUS	0x639
 #define	MSR_PP1_ENERGY_STATUS	0x641
+#define	MSR_PPERF		0x64e
 #define	MSR_TSC_DEADLINE	0x6e0	/* Writes are not serializing */
+#define	MSR_IA32_PM_ENABLE	0x770
+#define	MSR_IA32_HWP_CAPABILITIES	0x771
+#define	MSR_IA32_HWP_REQUEST_PKG	0x772
+#define	MSR_IA32_HWP_INTERRUPT		0x773
+#define	MSR_IA32_HWP_REQUEST	0x774
+#define	MSR_IA32_HWP_STATUS	0x777
 
 /*
  * VMX MSRs
@@ -710,6 +727,28 @@
 
 /* MSR IA32_PRED_CMD */
 #define	IA32_PRED_CMD_IBPB_BARRIER	0x0000000000000001ULL
+
+/* MSR IA32_FLUSH_CMD */
+#define	IA32_FLUSH_CMD_L1D	0x00000001
+
+/* MSR IA32_HWP_CAPABILITIES */
+#define	IA32_HWP_CAPABILITIES_HIGHEST_PERFORMANCE(x)	(((x) >> 0) & 0xff)
+#define	IA32_HWP_CAPABILITIES_GUARANTEED_PERFORMANCE(x)	(((x) >> 8) & 0xff)
+#define	IA32_HWP_CAPABILITIES_EFFICIENT_PERFORMANCE(x)	(((x) >> 16) & 0xff)
+#define	IA32_HWP_CAPABILITIES_LOWEST_PERFORMANCE(x)	(((x) >> 24) & 0xff)
+
+/* MSR IA32_HWP_REQUEST */
+#define	IA32_HWP_REQUEST_MINIMUM_VALID			(1ULL << 63)
+#define	IA32_HWP_REQUEST_MAXIMUM_VALID			(1ULL << 62)
+#define	IA32_HWP_REQUEST_DESIRED_VALID			(1ULL << 61)
+#define	IA32_HWP_REQUEST_EPP_VALID 			(1ULL << 60)
+#define	IA32_HWP_REQUEST_ACTIVITY_WINDOW_VALID		(1ULL << 59)
+#define	IA32_HWP_REQUEST_PACKAGE_CONTROL		(1ULL << 42)
+#define	IA32_HWP_ACTIVITY_WINDOW			(0x3ffULL << 32)
+#define	IA32_HWP_REQUEST_ENERGY_PERFORMANCE_PREFERENCE	(0xffULL << 24)
+#define	IA32_HWP_DESIRED_PERFORMANCE			(0xffULL << 16)
+#define	IA32_HWP_REQUEST_MAXIMUM_PERFORMANCE		(0xffULL << 8)
+#define	IA32_HWP_MINIMUM_PERFORMANCE			(0xffULL << 0)
 
 /*
  * PAT modes.
@@ -998,18 +1037,19 @@
 #define	MSR_TOP_MEM	0xc001001a	/* boundary for ram below 4G */
 #define	MSR_TOP_MEM2	0xc001001d	/* boundary for ram above 4G */
 #define	MSR_NB_CFG1	0xc001001f	/* NB configuration 1 */
+#define	MSR_K8_UCODE_UPDATE 0xc0010020	/* update microcode */
+#define	MSR_MC0_CTL_MASK 0xc0010044
 #define	MSR_P_STATE_LIMIT 0xc0010061	/* P-state Current Limit Register */
 #define	MSR_P_STATE_CONTROL 0xc0010062	/* P-state Control Register */
 #define	MSR_P_STATE_STATUS 0xc0010063	/* P-state Status Register */
 #define	MSR_P_STATE_CONFIG(n) (0xc0010064 + (n)) /* P-state Config */
 #define	MSR_SMM_ADDR	0xc0010112	/* SMM TSEG base address */
 #define	MSR_SMM_MASK	0xc0010113	/* SMM TSEG address mask */
+#define	MSR_VM_CR	0xc0010114	/* SVM: feature control */
+#define	MSR_VM_HSAVE_PA 0xc0010117	/* SVM: host save area address */
+#define	MSR_AMD_CPUID07	0xc0011002	/* CPUID 07 %ebx override */
 #define	MSR_EXTFEATURES	0xc0011005	/* Extended CPUID Features override */
 #define	MSR_IC_CFG	0xc0011021	/* Instruction Cache Configuration */
-#define	MSR_K8_UCODE_UPDATE	0xc0010020	/* update microcode */
-#define	MSR_MC0_CTL_MASK	0xc0010044
-#define	MSR_VM_CR		0xc0010114 /* SVM: feature control */
-#define	MSR_VM_HSAVE_PA		0xc0010117 /* SVM: host save area address */
 
 /* MSR_VM_CR related */
 #define	VM_CR_SVMDIS		0x10	/* SVM: disabled by BIOS */

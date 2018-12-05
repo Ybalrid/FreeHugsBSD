@@ -24,7 +24,7 @@
 .\"
 .\" $FreeBSD$
 .\"
-.Dd April 21, 2018
+.Dd October 24, 2018
 .Dt RC.CONF 5
 .Os
 .Sh NAME
@@ -2011,6 +2011,13 @@ List of devices to automatically attach on boot.
 Note that .eli devices from
 .Pa /etc/fstab
 are automatically appended to this list.
+.It Va geli_groups
+.Pq Vt str
+List of groups containing devices to automatically attach on boot with the same
+keyfiles and passphrase.
+This must be accompanied with a corresponding
+.Va geli_ Ns Ao Ar group Ac Ns Va _devices
+variable.
 .It Va geli_tries
 .Pq Vt int
 Number of times user is asked for the pass-phrase.
@@ -2022,8 +2029,10 @@ sysctl variable.
 Default flags to use by
 .Xr geli 8
 when configuring disk encryption.
-Flags can be configured for every device separately by defining
+Flags can be configured for every device separately by defining the
 .Va geli_ Ns Ao Ar device Ac Ns Va _flags
+variable, and for every group separately by defining the
+.Va geli_ Ns Ao Ar group Ac Ns Va _flags
 variable.
 .It Va geli_autodetach
 .Pq Vt str
@@ -2031,7 +2040,7 @@ Specifies if GELI devices should be marked for detach on last close after
 file systems are mounted.
 Default is
 .Dq Li YES .
-This can be changed for every device separately by defining
+This can be changed for every device separately by defining the
 .Va geli_ Ns Ao Ar device Ac Ns Va _autodetach
 variable.
 .It Va root_rw_mount
@@ -2553,6 +2562,14 @@ This command is intended to
 synchronize the system clock only
 .Em once
 from some standard reference.
+.Pp
+Note that the use of the
+.Va ntpd_sync_on_start
+variable is a preferred alternative to the
+.Xr ntpdate 8
+utility as
+.Xr ntpdate 8
+is to be retired from the NTP distribution.
 .It Va ntpdate_config
 .Pq Vt str
 Configuration file for
@@ -3239,11 +3256,9 @@ is set to
 this is the actual port the mouse is on.
 It might be
 .Pa /dev/cuau0
-for a COM1 serial mouse,
+for a COM1 serial mouse, or
 .Pa /dev/psm0
-for a PS/2 mouse or
-.Pa /dev/mse0
-for a bus mouse, for example.
+for a PS/2 mouse, for example.
 .It Va moused_flags
 .Pq Vt str
 If
@@ -4494,6 +4509,14 @@ at boot time.
 The directory where the files exported by USB LUN are located.
 The default directory is
 .Pa /var/cfumass .
+.It Va service_delete_empty
+.Pq Vt bool
+If set to
+.Dq Li YES ,
+.Ql Li service delete
+removes empty
+.Dq Li rc.conf.d
+files.
 .El
 .Sh FILES
 .Bl -tag -width ".Pa /etc/defaults/rc.conf" -compact
@@ -4582,6 +4605,7 @@ The default directory is
 .Xr rwhod 8 ,
 .Xr savecore 8 ,
 .Xr sdpd 8 ,
+.Xr service 8 ,
 .Xr sshd 8 ,
 .Xr swapon 8 ,
 .Xr sysctl 8 ,

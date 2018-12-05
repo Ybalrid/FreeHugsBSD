@@ -34,6 +34,8 @@
         ..
         pwait
         ..
+        rm
+        ..
         rmdir
         ..
         sh
@@ -66,6 +68,8 @@
         ..
         usr.bin
             ctfconvert
+            ..
+            ztest
             ..
         ..
         usr.sbin
@@ -266,6 +270,14 @@
             test-programs
             ..
         ..
+        csu
+            dynamic
+            ..
+            dynamiclib
+            ..
+            static
+            ..
+        ..
         libarchive
         ..
         libc
@@ -386,6 +398,8 @@
         ..
     ..
     sbin
+        bectl
+        ..
         dhclient
         ..
         devd
@@ -429,6 +443,10 @@
         acl
         ..
         aio
+        ..
+        audit
+        ..
+        auditpipe
         ..
         capsicum
         ..
@@ -1025,6 +1043,8 @@
         newsyslog
         ..
         nmtree
+        ..
+        praudit
         ..
         pw
         ..

@@ -251,6 +251,7 @@ struct rt_msghdr {
 	u_char	rtm_version;	/* future binary compatibility */
 	u_char	rtm_type;	/* message type */
 	u_short	rtm_index;	/* index for associated ifp */
+	u_short _rtm_spare1;
 	int	rtm_flags;	/* flags, incl. kern & message, e.g. DONE */
 	int	rtm_addrs;	/* bitmask identifying sockaddrs in msg */
 	pid_t	rtm_pid;	/* identify sender */
@@ -410,10 +411,8 @@ struct rt_addrinfo {
 } while (0)
 
 #define	RO_RTFREE(_ro) do {					\
-	if ((_ro)->ro_rt) {					\
-		RT_LOCK((_ro)->ro_rt);				\
-		RTFREE_LOCKED((_ro)->ro_rt);			\
-	}							\
+	if ((_ro)->ro_rt)					\
+		RTFREE((_ro)->ro_rt);				\
 } while (0)
 
 #define	RO_INVALIDATE_CACHE(ro) do {					\

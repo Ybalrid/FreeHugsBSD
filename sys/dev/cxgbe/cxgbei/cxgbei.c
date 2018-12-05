@@ -343,6 +343,7 @@ do_rx_iscsi_ddp(struct sge_iq *iq, const struct rss_header *rss, struct mbuf *m)
 	struct icl_cxgbei_pdu *icp = toep->ulpcb2;
 	struct icl_pdu *ip;
 	u_int pdu_len, val;
+	struct epoch_tracker et;
 
 	MPASS(m == NULL);
 
@@ -411,12 +412,12 @@ do_rx_iscsi_ddp(struct sge_iq *iq, const struct rss_header *rss, struct mbuf *m)
 		SOCKBUF_UNLOCK(sb);
 		INP_WUNLOCK(inp);
 
-		INP_INFO_RLOCK(&V_tcbinfo);
+		INP_INFO_RLOCK_ET(&V_tcbinfo, et);
 		INP_WLOCK(inp);
 		tp = tcp_drop(tp, ECONNRESET);
 		if (tp)
 			INP_WUNLOCK(inp);
-		INP_INFO_RUNLOCK(&V_tcbinfo);
+		INP_INFO_RUNLOCK_ET(&V_tcbinfo, et);
 
 		icl_cxgbei_conn_pdu_free(NULL, ip);
 #ifdef INVARIANTS
@@ -448,9 +449,9 @@ do_rx_iscsi_ddp(struct sge_iq *iq, const struct rss_header *rss, struct mbuf *m)
 			struct icl_pdu *ip0;
 
 			ip0 = icl_cxgbei_new_pdu(M_NOWAIT);
-			icl_cxgbei_new_pdu_set_conn(ip0, ic);
 			if (ip0 == NULL)
 				CXGBE_UNIMPLEMENTED("PDU allocation failure");
+			icl_cxgbei_new_pdu_set_conn(ip0, ic);
 			icp0 = ip_to_icp(ip0);
 			icp0->icp_seq = 0; /* XXX */
 			icp0->icp_flags = ICPF_RX_HDR | ICPF_RX_STATUS;
@@ -670,7 +671,7 @@ start_worker_threads(void)
 			    i + 1, worker_thread_count, rc);
 			mtx_destroy(&cwt->cwt_lock);
 			cv_destroy(&cwt->cwt_cv);
-			bzero(&cwt, sizeof(*cwt));
+			bzero(cwt, sizeof(*cwt));
 			if (i == 0) {
 				free(cwt_softc, M_CXGBE);
 				worker_thread_count = 0;

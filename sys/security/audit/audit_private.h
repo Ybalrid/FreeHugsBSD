@@ -2,7 +2,7 @@
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Copyright (c) 1999-2009 Apple Inc.
- * Copyright (c) 2016-2017 Robert N. M. Watson
+ * Copyright (c) 2016, 2018 Robert N. M. Watson
  * All rights reserved.
  *
  * Portions of this software were developed by BAE Systems, the University of
@@ -275,7 +275,7 @@ struct audit_record {
 #define	ARG_SADDRINET		0x0000000000100000ULL
 #define	ARG_SADDRINET6		0x0000000000200000ULL
 #define	ARG_SADDRUNIX		0x0000000000400000ULL
-#define	ARG_TERMID_ADDR		0x0000000000400000ULL
+#define	ARG_TERMID_ADDR		0x0000000000800000ULL
 #define	ARG_UNUSED2		0x0000000001000000ULL
 #define	ARG_UPATH1		0x0000000002000000ULL
 #define	ARG_UPATH2		0x0000000004000000ULL
@@ -342,6 +342,13 @@ void			 audit_abort(struct kaudit_record *ar);
 void			 audit_commit(struct kaudit_record *ar, int error,
 			    int retval);
 struct kaudit_record	*audit_new(int event, struct thread *td);
+
+/*
+ * Function to update the audit_syscalls_enabled flag, whose value is affected
+ * by configuration of the audit trail/pipe mechanism and DTrace.  Call this
+ * function when any of the inputs to that policy change.
+ */
+void	audit_syscalls_enabled_update(void);
 
 /*
  * Functions relating to the conversion of internal kernel audit records to

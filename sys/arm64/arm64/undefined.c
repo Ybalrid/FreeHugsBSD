@@ -63,9 +63,6 @@ id_aa64mmfr2_handler(vm_offset_t va, uint32_t insn, struct trapframe *frame,
 {
 	int reg;
 
-#define	MRS_MASK			0xfff00000
-#define	MRS_VALUE			0xd5300000
-#define	MRS_REGISTER(insn)		((insn) & 0x1f)
 #define	 MRS_ID_AA64MMFR2_EL0_MASK	(MRS_MASK | 0x000fffe0)
 #define	 MRS_ID_AA64MMFR2_EL0_VALUE	(MRS_VALUE | 0x00080740)
 

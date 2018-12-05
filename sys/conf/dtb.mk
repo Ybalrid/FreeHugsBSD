@@ -55,20 +55,20 @@ DTBO=${DTSO:R:S/$/.dtbo/}
 all: ${DTB} ${DTBO}
 
 .if defined(DTS)
-.export DTC
+.export DTC ECHO
 .for _dts in ${DTS}
 ${_dts:R:S/$/.dtb/}:	${_dts} ${OP_META}
-	@echo Generating ${.TARGET} from ${_dts}
+	@${ECHO} Generating ${.TARGET} from ${_dts}
 	@${SYSDIR}/tools/fdt/make_dtb.sh ${SYSDIR} ${_dts} ${.OBJDIR}
 CLEANFILES+=${_dts:R:S/$/.dtb/}
 .endfor
 .endif
 
 .if defined(DTSO)
-.export DTC
+.export DTC ECHO
 .for _dtso in ${DTSO}
 ${_dtso:R:S/$/.dtbo/}:	${_dtso} ${OP_META}
-	@echo Generating ${.TARGET} from ${_dtso}
+	@${ECHO} Generating ${.TARGET} from ${_dtso}
 	@${SYSDIR}/tools/fdt/make_dtbo.sh ${SYSDIR} overlays/${_dtso} ${.OBJDIR}
 CLEANFILES+=${_dtso:R:S/$/.dtbo/}
 .endfor
@@ -84,8 +84,14 @@ _dtbinstall:
 # entries in the NO_ROOT case.
 	test -d ${DESTDIR}${DTBDIR} || ${INSTALL} -d -o ${DTBOWN} -g ${DTBGRP} ${DESTDIR}${DTBDIR}
 .for _dtb in ${DTB}
+.if ${MACHINE_CPUARCH} == "aarch64"
+	test -d ${DESTDIR}${DTBDIR}/${_dtb:H} || ${INSTALL} -d -o ${DTBOWN} -g ${DTBGRP} ${DESTDIR}${DTBDIR}/${_dtb:H}
+	${INSTALL} -o ${DTBOWN} -g ${DTBGRP} -m ${DTBMODE} \
+	    ${_INSTALLFLAGS} ${_dtb:T} ${DESTDIR}${DTBDIR}/${_dtb:H}
+.else
 	${INSTALL} -o ${DTBOWN} -g ${DTBGRP} -m ${DTBMODE} \
 	    ${_INSTALLFLAGS} ${_dtb} ${DESTDIR}${DTBDIR}/
+.endif
 .endfor
 	test -d ${DESTDIR}${DTBODIR} || ${INSTALL} -d -o ${DTBOWN} -g ${DTBGRP} ${DESTDIR}${DTBODIR}
 .for _dtbo in ${DTBO}

@@ -43,6 +43,7 @@ __FBSDID("$FreeBSD$");
 #include "opt_inet6.h"
 
 #include <sys/param.h>
+#include <sys/systm.h>
 #include <sys/dirent.h>
 #include <sys/jail.h>
 #include <sys/kernel.h>
@@ -51,11 +52,10 @@ __FBSDID("$FreeBSD$");
 #include <sys/mbuf.h>
 #include <sys/mount.h>
 #include <sys/mutex.h>
-#include <sys/rwlock.h>
+#include <sys/rmlock.h>
 #include <sys/refcount.h>
 #include <sys/signalvar.h>
 #include <sys/socket.h>
-#include <sys/systm.h>
 #include <sys/vnode.h>
 
 #include <netinet/in.h>
@@ -449,6 +449,7 @@ vfs_setpublicfs(struct mount *mp, struct netexport *nep,
 static struct netcred *
 vfs_export_lookup(struct mount *mp, struct sockaddr *nam)
 {
+	RADIX_NODE_HEAD_RLOCK_TRACKER;
 	struct netexport *nep;
 	struct netcred *np = NULL;
 	struct radix_node_head *rnh;

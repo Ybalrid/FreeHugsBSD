@@ -62,6 +62,11 @@ static int	unprivileged_mlock = 1;
 SYSCTL_INT(_security_bsd, OID_AUTO, unprivileged_mlock, CTLFLAG_RWTUN,
     &unprivileged_mlock, 0, "Allow non-root users to call mlock(2)");
 
+static int	unprivileged_read_msgbuf = 1;
+SYSCTL_INT(_security_bsd, OID_AUTO, unprivileged_read_msgbuf,
+    CTLFLAG_RW, &unprivileged_read_msgbuf, 0,
+    "Unprivileged processes may read the kernel message buffer");
+
 SDT_PROVIDER_DEFINE(priv);
 SDT_PROBE_DEFINE1(priv, kernel, priv_check, priv__ok, "int");
 SDT_PROBE_DEFINE1(priv, kernel, priv_check, priv__err, "int");
@@ -109,6 +114,17 @@ priv_check_cred(struct ucred *cred, int priv, int flags)
 		}
 	}
 
+	if (unprivileged_read_msgbuf) {
+		/*
+		 * Allow an unprivileged user to read the kernel message
+		 * buffer.
+		 */
+		if (priv == PRIV_MSGBUF) {
+			error = 0;
+			goto out;
+		}
+	}
+
 	/*
 	 * Having determined if privilege is restricted by various policies,
 	 * now determine if privilege is granted.  At this point, any policy
@@ -147,6 +163,18 @@ priv_check_cred(struct ucred *cred, int priv, int flags)
 	if (priv == PRIV_KMEM_READ) {
 		error = 0;
 		goto out;
+	}
+
+	/*
+	 * Allow unprivileged process debugging on a per-jail basis.
+	 * Do this here instead of prison_priv_check(), so it can also
+	 * apply to prison0.
+	 */
+	if (priv == PRIV_DEBUG_UNPRIV) {
+		if (prison_allow(cred, PR_ALLOW_UNPRIV_DEBUG)) {
+			error = 0;
+			goto out;
+		}
 	}
 
 	/*

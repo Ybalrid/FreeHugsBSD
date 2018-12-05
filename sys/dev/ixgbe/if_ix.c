@@ -237,7 +237,7 @@ static driver_t ix_driver = {
 
 devclass_t ix_devclass;
 DRIVER_MODULE(ix, pci, ix_driver, ix_devclass, 0, 0);
-
+IFLIB_PNP_INFO(pci, ix_driver, ixgbe_vendor_info_array);
 MODULE_DEPEND(ix, pci, 1, 1, 1);
 MODULE_DEPEND(ix, ether, 1, 1, 1);
 MODULE_DEPEND(ix, iflib, 1, 1, 1);
@@ -362,10 +362,10 @@ extern struct if_txrx ixgbe_txrx;
 static struct if_shared_ctx ixgbe_sctx_init = {
 	.isc_magic = IFLIB_MAGIC,
 	.isc_q_align = PAGE_SIZE,/* max(DBA_ALIGN, PAGE_SIZE) */
-	.isc_tx_maxsize = IXGBE_TSO_SIZE,
-
+	.isc_tx_maxsize = IXGBE_TSO_SIZE + sizeof(struct ether_vlan_header),
 	.isc_tx_maxsegsize = PAGE_SIZE,
-
+	.isc_tso_maxsize = IXGBE_TSO_SIZE + sizeof(struct ether_vlan_header),
+	.isc_tso_maxsegsize = PAGE_SIZE,
 	.isc_rx_maxsize = PAGE_SIZE*4,
 	.isc_rx_nsegments = 1,
 	.isc_rx_maxsegsize = PAGE_SIZE*4,
@@ -1032,7 +1032,7 @@ ixgbe_if_attach_pre(if_ctx_t ctx)
 
 	scctx->isc_txrx = &ixgbe_txrx;
 
-	scctx->isc_capenable = IXGBE_CAPS;
+	scctx->isc_capabilities = scctx->isc_capenable = IXGBE_CAPS;
 
 	return (0);
 
@@ -1173,20 +1173,10 @@ ixgbe_setup_interface(if_ctx_t ctx)
 
 	INIT_DEBUGOUT("ixgbe_setup_interface: begin");
 
-	if_setifheaderlen(ifp, sizeof(struct ether_vlan_header));
 	if_setbaudrate(ifp, IF_Gbps(10));
 
 	adapter->max_frame_size = ifp->if_mtu + ETHER_HDR_LEN + ETHER_CRC_LEN;
 
-	/*
-	 * Don't turn this on by default, if vlans are
-	 * created on another pseudo device (eg. lagg)
-	 * then vlan events are not passed thru, breaking
-	 * operation, but with HW FILTER off it works. If
-	 * using vlans directly on the ixgbe driver you can
-	 * enable this and get full hardware tag filtering.
-	 */
-	if_setcapenablebit(ifp, 0, IFCAP_VLAN_HWFILTER);
 	adapter->phy_layer = ixgbe_get_supported_physical_layer(&adapter->hw);
 
 	ixgbe_add_media_types(ctx);

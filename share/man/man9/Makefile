@@ -113,6 +113,7 @@ MAN=	accept_filter.9 \
 	device_set_flags.9 \
 	DEVICE_SHUTDOWN.9 \
 	DEV_MODULE.9 \
+	dev_refthread.9 \
 	devstat.9 \
 	devtoname.9 \
 	disk.9 \
@@ -123,6 +124,7 @@ MAN=	accept_filter.9 \
 	drbr.9 \
 	driver.9 \
 	DRIVER_MODULE.9 \
+	efirt.9 \
 	epoch.9 \
 	EVENTHANDLER.9 \
 	eventtimers.9 \
@@ -269,6 +271,7 @@ MAN=	accept_filter.9 \
 	psignal.9 \
 	random.9 \
 	random_harvest.9 \
+	ratecheck.9 \
 	redzone.9 \
 	refcount.9 \
 	resettodr.9 \
@@ -453,6 +456,7 @@ MLINKS+=altq.9 ALTQ.9
 MLINKS+=atomic.9 atomic_add.9 \
 	atomic.9 atomic_clear.9 \
 	atomic.9 atomic_cmpset.9 \
+	atomic.9 atomic_fcmpset.9 \
 	atomic.9 atomic_fetchadd.9 \
 	atomic.9 atomic_load.9 \
 	atomic.9 atomic_readandclear.9 \
@@ -460,7 +464,9 @@ MLINKS+=atomic.9 atomic_add.9 \
 	atomic.9 atomic_store.9 \
 	atomic.9 atomic_subtract.9 \
 	atomic.9 atomic_swap.9 \
-	atomic.9 atomic_testandset.9
+	atomic.9 atomic_testandclear.9 \
+	atomic.9 atomic_testandset.9 \
+	atomic.9 atomic_thread_fence.9
 MLINKS+=bhnd.9 BHND_MATCH_BOARD_TYPE.9 \
 	bhnd.9 BHND_MATCH_BOARD_VENDOR.9 \
 	bhnd.9 BHND_MATCH_CHIP_ID.9 \
@@ -806,7 +812,8 @@ MLINKS+=condvar.9 cv_broadcast.9 \
 MLINKS+=config_intrhook.9 config_intrhook_disestablish.9 \
 	config_intrhook.9 config_intrhook_establish.9 \
 	config_intrhook.9 config_intrhook_oneshot.9
-MLINKS+=contigmalloc.9 contigfree.9
+MLINKS+=contigmalloc.9 contigmalloc_domainset.9 \
+	contigmalloc.9 contigfree.9
 MLINKS+=casuword.9 casueword.9 \
 	casuword.9 casueword32.9 \
 	casuword.9 casuword32.9
@@ -873,6 +880,8 @@ MLINKS+=DB_COMMAND.9 DB_SHOW_ALL_COMMAND.9 \
 	DB_COMMAND.9 DB_SHOW_COMMAND.9
 MLINKS+=DECLARE_MODULE.9 DECLARE_MODULE_TIED.9
 MLINKS+=dev_clone.9 drain_dev_clone_events.9
+MLINKS+=dev_refthread.9 devvn_refthread.9 \
+	dev_refthread.9 dev_relthread.9
 MLINKS+=devfs_set_cdevpriv.9 devfs_clear_cdevpriv.9 \
 	devfs_set_cdevpriv.9 devfs_get_cdevpriv.9
 MLINKS+=device_add_child.9 device_add_child_ordered.9
@@ -1281,7 +1290,7 @@ MLINKS+=make_dev.9 destroy_dev.9 \
 	make_dev.9 make_dev_p.9 \
 	make_dev.9 make_dev_s.9
 MLINKS+=malloc.9 free.9 \
-	malloc.9 malloc_domain.9 \
+	malloc.9 malloc_domainset.9 \
 	malloc.9 free_domain.9 \
 	malloc.9 mallocarray.9 \
 	malloc.9 MALLOC_DECLARE.9 \
@@ -1540,7 +1549,9 @@ MLINKS+=OF_device_from_xref.9 OF_device_register_xref.9 \
 	OF_device_from_xref.9 OF_xref_from_device.9
 MLINKS+=OF_getprop.9 OF_getencprop.9 \
 	OF_getprop.9 OF_getencprop_alloc.9 \
+	OF_getprop.9 OF_getencprop_alloc_multi.9 \
 	OF_getprop.9 OF_getprop_alloc.9 \
+	OF_getprop.9 OF_getprop_alloc_multi.9 \
 	OF_getprop.9 OF_getproplen.9 \
 	OF_getprop.9 OF_hasprop.9 \
 	OF_getprop.9 OF_nextprop.9 \
@@ -1668,6 +1679,7 @@ MLINKS+=random.9 arc4rand.9 \
 MLINKS+=random_harvest.9 random_harvest_direct.9 \
 	random_harvest.9 random_harvest_fast.9 \
 	random_harvest.9 random_harvest_queue.9
+MLINKS+=ratecheck.9 ppsratecheck.9
 MLINKS+=refcount.9 refcount_acquire.9 \
 	refcount.9 refcount_init.9 \
 	refcount.9 refcount_release.9
@@ -1895,6 +1907,7 @@ MLINKS+=socket.9 soabort.9 \
 	socket.9 soconnect.9 \
 	socket.9 socreate.9 \
 	socket.9 sodisconnect.9 \
+	socket.9 sodtor_set.9 \
 	socket.9 sodupsockaddr.9 \
 	socket.9 sofree.9 \
 	socket.9 sogetopt.9 \
@@ -2043,6 +2056,7 @@ MLINKS+=taskqueue.9 TASK_INIT.9 \
 	taskqueue.9 TASKQUEUE_FAST_DEFINE_THREAD.9 \
 	taskqueue.9 taskqueue_free.9 \
 	taskqueue.9 taskqueue_member.9 \
+	taskqueue.9 taskqueue_quiesce.9 \
 	taskqueue.9 taskqueue_run.9 \
 	taskqueue.9 taskqueue_set_callback.9 \
 	taskqueue.9 taskqueue_start_threads.9 \
