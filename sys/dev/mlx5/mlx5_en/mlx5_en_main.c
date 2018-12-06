@@ -160,8 +160,6 @@ static const struct {
 
 MALLOC_DEFINE(M_MLX5EN, "MLX5EN", "MLX5 Ethernet");
 
-SYSCTL_DECL(_hw_mlx5);
-
 static void
 mlx5e_update_carrier(struct mlx5e_priv *priv)
 {
@@ -1214,13 +1212,8 @@ mlx5e_create_sq(struct mlx5e_channel *c,
 	struct mlx5e_priv *priv = c->priv;
 	struct mlx5_core_dev *mdev = priv->mdev;
 	char buffer[16];
-
 	void *sqc = param->sqc;
 	void *sqc_wq = MLX5_ADDR_OF(sqc, sqc, wq);
-#ifdef RSS
-	cpuset_t cpu_mask;
-	int cpu_id;
-#endif
 	int err;
 
 	/* Create DMA descriptor TAG */
