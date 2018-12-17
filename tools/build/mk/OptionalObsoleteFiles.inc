@@ -38,7 +38,7 @@ OLD_FILES+=usr/tests/usr.sbin/sa/v2-i386-usr.in
 OLD_FILES+=usr/tests/usr.sbin/sa/v2-sparc64-sav.in
 OLD_FILES+=usr/tests/usr.sbin/sa/v2-sparc64-u.out
 OLD_FILES+=usr/tests/usr.sbin/sa/v2-sparc64-usr.in
-OLD_FILES+=usr/tests/usr.sbin/sa
+OLD_DIRS+=usr/tests/usr.sbin/sa
 .endif
 
 .if ${MK_ACPI} == no
@@ -147,6 +147,8 @@ OLD_FILES+=usr/share/man/man3/unistruct.3.gz
 .endif
 
 .if ${MK_AUDIT} == no
+OLD_FILES+=etc/rc.d/auditd
+OLD_FILES+=etc/rc.d/auditdistd
 OLD_FILES+=usr/sbin/audit
 OLD_FILES+=usr/sbin/auditd
 OLD_FILES+=usr/sbin/auditdistd
