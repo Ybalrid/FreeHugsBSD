@@ -1,9 +1,5 @@
-/*	$OpenBSD: if_rtwn.c,v 1.6 2015/08/28 00:03:53 deraadt Exp $	*/
-
 /*-
- * Copyright (c) 2010 Damien Bergamini <damien.bergamini@free.fr>
- * Copyright (c) 2015 Stefan Sperling <stsp@openbsd.org>
- * Copyright (c) 2016 Andriy Voskoboinyk <avos@FreeBSD.org>
+ * Copyright (c) 2017 Farhan Khan <khanzf@gmail.com>
  *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -53,80 +49,95 @@ __FBSDID("$FreeBSD$");
 
 #include <dev/rtwn/pci/rtwn_pci_var.h>
 
-#include <dev/rtwn/rtl8192c/pci/r92ce.h>
-#include <dev/rtwn/rtl8192c/pci/r92ce_reg.h>
-
+#include <dev/rtwn/rtl8188e/pci/r88ee.h>
+#include <dev/rtwn/rtl8188e/pci/r88ee_reg.h>
 
 int
-r92ce_get_intr_status(struct rtwn_pci_softc *pc, int *rings)
+r88ee_get_intr_status(struct rtwn_pci_softc *pc, int *rings)
 {
 	struct rtwn_softc *sc = &pc->pc_sc;
-	uint32_t status;
+	uint32_t status, status_ex;
 	int ret;
 
 	*rings = 0;
-	status = rtwn_read_4(sc, R92C_HISR);
-	RTWN_DPRINTF(sc, RTWN_DEBUG_INTR, "%s: HISR %08X, HISRE %04X\n",
-	    __func__, status, rtwn_read_2(sc, R92C_HISRE));
-	if (status == 0 || status == 0xffffffff)
+	status = rtwn_read_4(sc, R88E_HISR);
+	status_ex = rtwn_read_4(sc, R88E_HISRE);
+	RTWN_DPRINTF(sc, RTWN_DEBUG_INTR, "%s: HISR %08X, HISRE %08X\n",
+	    __func__, status, status_ex);
+	if ((status == 0 || status == 0xffffffff) &&
+	    (status_ex == 0 || status_ex == 0xffffffff))
 		return (0);
 
-	/* Disable interrupts. */
-	rtwn_write_4(sc, R92C_HIMR, 0);
+	/* Disable interrupts */
+	rtwn_write_4(sc, R88E_HIMR, 0);
+	rtwn_write_4(sc, R88E_HIMRE, 0);
 
-	/* Ack interrupts. */
-	rtwn_write_4(sc, R92C_HISR, status);
+	/* Ack interrupts */
+	rtwn_write_4(sc, R88E_HISR, status);
+	rtwn_write_4(sc, R88E_HISRE, status_ex);
 
-	if (status & R92C_IMR_BDOK)
-		*rings |= (1 << RTWN_PCI_BEACON_QUEUE);
-	if (status & R92C_IMR_HIGHDOK)
+	if (status & R88E_HIMR_HIGHDOK)
 		*rings |= (1 << RTWN_PCI_HIGH_QUEUE);
-	if (status & R92C_IMR_MGNTDOK)
+	if (status & R88E_HIMR_MGNTDOK)
 		*rings |= (1 << RTWN_PCI_MGNT_QUEUE);
-	if (status & R92C_IMR_BKDOK)
+	if (status & R88E_HIMR_BKDOK)
 		*rings |= (1 << RTWN_PCI_BK_QUEUE);
-	if (status & R92C_IMR_BEDOK)
+	if (status & R88E_HIMR_BEDOK)
 		*rings |= (1 << RTWN_PCI_BE_QUEUE);
-	if (status & R92C_IMR_VIDOK)
+	if (status & R88E_HIMR_VIDOK)
 		*rings |= (1 << RTWN_PCI_VI_QUEUE);
-	if (status & R92C_IMR_VODOK)
+	if (status & R88E_HIMR_VODOK)
 		*rings |= (1 << RTWN_PCI_VO_QUEUE);
 
 	ret = 0;
-	if (status & R92C_IMR_RXFOVW)
+	if (status_ex & R88E_HIMRE_RXERR)
+		ret |= RTWN_PCI_INTR_RX_ERROR;
+	if (status_ex & R88E_HIMRE_RXFOVW)
 		ret |= RTWN_PCI_INTR_RX_OVERFLOW;
-	if (status & R92C_IMR_RDU)
+	if (status & R88E_HIMR_RDU)
 		ret |= RTWN_PCI_INTR_RX_DESC_UNAVAIL;
-	if (status & R92C_IMR_ROK)
+	if (status & R88E_HIMR_ROK)
 		ret |= RTWN_PCI_INTR_RX_DONE;
-	if (status & R92C_IMR_TXFOVW)
+	if (status_ex & R88E_HIMRE_TXERR)
+		ret |= RTWN_PCI_INTR_TX_ERROR;
+	if (status_ex & R88E_HIMRE_TXFOVW)
 		ret |= RTWN_PCI_INTR_TX_OVERFLOW;
-	if (status & R92C_IMR_PSTIMEOUT)
+	if (status & R88E_HIMR_TXRPT)
+		ret |= RTWN_PCI_INTR_TX_REPORT;
+	if (status & R88E_HIMR_PSTIMEOUT)
 		ret |= RTWN_PCI_INTR_PS_TIMEOUT;
 
 	return (ret);
 }
 
-#define R92C_INT_ENABLE (R92C_IMR_ROK | R92C_IMR_VODOK | R92C_IMR_VIDOK | \
-			R92C_IMR_BEDOK | R92C_IMR_BKDOK | R92C_IMR_MGNTDOK | \
-			R92C_IMR_HIGHDOK | R92C_IMR_BDOK | R92C_IMR_RDU | \
-			R92C_IMR_RXFOVW)
+#define	R88E_INT_ENABLE	(R88E_HIMR_ROK | R88E_HIMR_RDU | R88E_HIMR_VODOK | \
+			 R88E_HIMR_VIDOK | R88E_HIMR_BEDOK | \
+			 R88E_HIMR_BKDOK | R88E_HIMR_MGNTDOK | \
+			 R88E_HIMR_HIGHDOK | R88E_HIMR_TXRPT)
+
+#define	R88E_INT_ENABLE_EX	(R88E_HIMRE_RXFOVW | R88E_HIMRE_RXERR)
+
 void
-r92ce_enable_intr(struct rtwn_pci_softc *pc)
+r88ee_enable_intr(struct rtwn_pci_softc *pc)
 {
 	struct rtwn_softc *sc = &pc->pc_sc;
 
-	/* Enable interrupts. */
-	rtwn_write_4(sc, R92C_HIMR, R92C_INT_ENABLE);
+	/* Enable interrupts */
+	rtwn_write_4(sc, R88E_HIMR, R88E_INT_ENABLE);
+	rtwn_write_4(sc, R88E_HIMRE, R88E_INT_ENABLE_EX);
 }
 
 void
-r92ce_start_xfers(struct rtwn_softc *sc)
+r88ee_start_xfers(struct rtwn_softc *sc)
 {
 	/* Clear pending interrupts. */
-	rtwn_write_4(sc, R92C_HISR, 0xffffffff);
+	rtwn_write_4(sc, R88E_HISR, 0xffffffff);
+	rtwn_write_4(sc, R88E_HISRE, 0xffffffff);
 
 	/* Enable interrupts. */
-	rtwn_write_4(sc, R92C_HIMR, R92C_INT_ENABLE);
+	rtwn_write_4(sc, R88E_HIMR, R88E_INT_ENABLE);
+	rtwn_write_4(sc, R88E_HIMRE, R88E_INT_ENABLE_EX);
 }
-#undef R92C_INT_ENABLE
+
+#undef R88E_INT_ENABLE
+#undef R88E_INT_ENABLE_EX

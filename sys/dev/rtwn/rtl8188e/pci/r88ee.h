@@ -1,6 +1,5 @@
 /*-
- * Copyright (c) 2010 Damien Bergamini <damien.bergamini@free.fr>
- * Copyright (c) 2015-2016 Andriy Voskoboinyk <avos@FreeBSD.org>
+ * Copyright (c) 2018 Farhan Khan <khanzf@gmail.com>
  *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -14,12 +13,11 @@
  * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  *
- * $OpenBSD: if_urtwnreg.h,v 1.3 2010/11/16 18:02:59 damien Exp $
  * $FreeBSD$
  */
 
-#ifndef RTL8188EU_H
-#define RTL8188EU_H
+#ifndef RTL8188EE_H
+#define RTL8188EE_H
 
 #include <dev/rtwn/rtl8188e/r88e.h>
 
@@ -27,19 +25,29 @@
 /*
  * Global definitions.
  */
-#define R88EU_PUBQ_NPAGES	142
-#define R88EU_TX_PAGE_COUNT	169
+#define R88EE_PUBQ_NPAGES	115
+#define R88EE_HPQ_NPAGES	41
+#define R88EE_NPQ_NPAGES	1
+#define R88EE_LPQ_NPAGES	13
+#define R88EE_TX_PAGE_COUNT	\
+	(R88EE_PUBQ_NPAGES + R88EE_HPQ_NPAGES + \
+	 R88EE_NPQ_NPAGES + R88EE_LPQ_NPAGES)
 
 
 /*
  * Function declarations.
  */
-/* r88eu_init.c */
-void	r88eu_init_bb(struct rtwn_softc *);
-int	r88eu_power_on(struct rtwn_softc *);
-void	r88eu_power_off(struct rtwn_softc *);
-void	r88eu_init_intr(struct rtwn_softc *);
-void	r88eu_init_rx_agg(struct rtwn_softc *);
-void	r88eu_post_init(struct rtwn_softc *);
+/* r88ee_init.c */
+void	r88ee_init_bb(struct rtwn_softc *);
+void	r88ee_init_intr(struct rtwn_softc *);
+int	r88ee_power_on(struct rtwn_softc *);
+void	r88ee_power_off(struct rtwn_softc *);
 
-#endif	/* RTL8188EU_H */
+/* r88ee_rx.c */
+int	r88ee_get_intr_status(struct rtwn_pci_softc *, int *);
+void	r88ee_enable_intr(struct rtwn_pci_softc *);
+void	r88ee_start_xfers(struct rtwn_softc *);
+void	r88ee_post_init(struct rtwn_softc *);
+
+#endif	/* RTL8188EE_H */
+
