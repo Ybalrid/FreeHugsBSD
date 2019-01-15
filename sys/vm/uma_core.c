@@ -2924,7 +2924,8 @@ zone_alloc_item_locked(uma_zone_t zone, void *udata, int domain, int flags)
 			zone->uz_sleeps++;
 			zone->uz_sleepers++;
 			while (zone->uz_items >= zone->uz_max_items)
-				mtx_sleep(zone, zone->uz_lockptr, PVM, "zonelimit", 0);
+				mtx_sleep(zone, zone->uz_lockptr, PVM,
+				    "zonelimit", 0);
 			zone->uz_sleepers--;
 			if (zone->uz_sleepers > 0 &&
 			    zone->uz_items + 1 < zone->uz_max_items)
@@ -3914,10 +3915,10 @@ sysctl_vm_zone_stats(SYSCTL_HANDLER_ARGS)
 					kz->uk_ppera;
 			else
 				uth.uth_pages = kz->uk_pages;
-			uth.uth_maxpages += (z->uz_max_items / kz->uk_ipers) *
+			uth.uth_maxpages = (z->uz_max_items / kz->uk_ipers) *
 			    kz->uk_ppera;
 			uth.uth_limit = z->uz_max_items;
-			uth.uth_keg_free += z->uz_keg->uk_free;
+			uth.uth_keg_free = z->uz_keg->uk_free;
 
 			/*
 			 * A zone is secondary is it is not the first entry
