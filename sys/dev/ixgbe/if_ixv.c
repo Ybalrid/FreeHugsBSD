@@ -144,11 +144,9 @@ static driver_t ixv_driver = {
 devclass_t ixv_devclass;
 DRIVER_MODULE(ixv, pci, ixv_driver, ixv_devclass, 0, 0);
 IFLIB_PNP_INFO(pci, ixv_driver, ixv_vendor_info_array);
+MODULE_DEPEND(ixv, iflib, 1, 1, 1);
 MODULE_DEPEND(ixv, pci, 1, 1, 1);
 MODULE_DEPEND(ixv, ether, 1, 1, 1);
-#ifdef DEV_NETMAP
-MODULE_DEPEND(ixv, netmap, 1, 1, 1);
-#endif /* DEV_NETMAP */
 
 static device_method_t ixv_if_methods[] = {
 	DEVMETHOD(ifdi_attach_pre, ixv_if_attach_pre),
@@ -222,6 +220,7 @@ static struct if_shared_ctx ixv_sctx_init = {
 	.isc_vendor_info = ixv_vendor_info_array,
 	.isc_driver_version = ixv_driver_version,
 	.isc_driver = &ixv_if_driver,
+	.isc_flags = IFLIB_TSO_INIT_IP,
 
 	.isc_nrxd_min = {MIN_RXD},
 	.isc_ntxd_min = {MIN_TXD},
