@@ -156,7 +156,7 @@ get_device_type(const char *devstr, int *devtype)
 		printf("Unknown device type '%s'\n", devstr);
 	}
 
-	*devtype = -1;
+	*devtype = DEV_TYP_NONE;
 	return (NULL);
 }
 
@@ -182,6 +182,14 @@ device_typename(int type)
  * The returned values for slice and partition are interpreted by
  * disk_open().
  *
+ * The device string can be a standard loader(8) disk specifier:
+ *
+ * disk<unit>s<slice>              disk0s1
+ * disk<unit>s<slice><partition>   disk1s2a
+ * disk<unit>p<partition>          disk0p4
+ *
+ * or one of the following formats:
+ *
  * Valid device strings:                     For device types:
  *
  * <type_name>                               DEV_TYP_STOR, DEV_TYP_NET
@@ -198,11 +206,12 @@ device_typename(int type)
 static void
 get_load_device(int *type, int *unit, int *slice, int *partition)
 {
+	struct disk_devdesc dev;
 	char *devstr;
 	const char *p;
 	char *endp;
 
-	*type = -1;
+	*type = DEV_TYP_NONE;
 	*unit = -1;
 	*slice = 0;
 	*partition = -1;
@@ -216,18 +225,31 @@ get_load_device(int *type, int *unit, int *slice, int *partition)
 
 	p = get_device_type(devstr, type);
 
+	/*
+	 * If type is DEV_TYP_STOR we have a disk-like device.  If we can parse
+	 * the remainder of the string as a standard unit+slice+partition (e.g.,
+	 * 0s2a or 1p12), return those results.  Otherwise we'll fall through to
+	 * the code that parses the legacy format.
+	 */
+	if ((*type & DEV_TYP_STOR) && disk_parsedev(&dev, p, NULL) == 0) {
+		*unit = dev.dd.d_unit;
+		*slice = dev.d_slice;
+		*partition = dev.d_partition;
+		return;
+	}
+
 	/* Ignore optional spaces after the device name. */
 	while (*p == ' ')
 		p++;
 
 	/* Unknown device name, or a known name without unit number.  */
-	if ((*type == -1) || (*p == '\0')) {
+	if ((*type == DEV_TYP_NONE) || (*p == '\0')) {
 		return;
 	}
 
 	/* Malformed unit number. */
 	if (!isdigit(*p)) {
-		*type = -1;
+		*type = DEV_TYP_NONE;
 		return;
 	}
 
@@ -242,7 +264,7 @@ get_load_device(int *type, int *unit, int *slice, int *partition)
 
 	/* Device string is malformed beyond unit number. */
 	if (*p != ':') {
-		*type = -1;
+		*type = DEV_TYP_NONE;
 		*unit = -1;
 		return;
 	}
@@ -255,7 +277,7 @@ get_load_device(int *type, int *unit, int *slice, int *partition)
 
 	/* Only DEV_TYP_STOR devices can have a slice specification. */
 	if (!(*type & DEV_TYP_STOR)) {
-		*type = -1;
+		*type = DEV_TYP_NONE;
 		*unit = -1;
 		return;
 	}
@@ -264,7 +286,7 @@ get_load_device(int *type, int *unit, int *slice, int *partition)
 
 	/* Malformed slice number. */
 	if (p == endp) {
-		*type = -1;
+		*type = DEV_TYP_NONE;
 		*unit = -1;
 		*slice = 0;
 		return;
@@ -278,7 +300,7 @@ get_load_device(int *type, int *unit, int *slice, int *partition)
 
 	/* Device string is malformed beyond slice number. */
 	if (*p != '.') {
-		*type = -1;
+		*type = DEV_TYP_NONE;
 		*unit = -1;
 		*slice = 0;
 		return;
@@ -298,7 +320,7 @@ get_load_device(int *type, int *unit, int *slice, int *partition)
 		return;
 
 	/* Junk beyond partition number. */
-	*type = -1;
+	*type = DEV_TYP_NONE;
 	*unit = -1;
 	*slice = 0;
 	*partition = -1;
@@ -467,14 +489,14 @@ main(int argc, char **argv)
 		currdev.dd.d_dev = devsw[i];
 		currdev.dd.d_unit = 0;
 
-		if ((load_type == -1 || (load_type & DEV_TYP_STOR)) &&
+		if ((load_type == DEV_TYP_NONE || (load_type & DEV_TYP_STOR)) &&
 		    strcmp(devsw[i]->dv_name, "disk") == 0) {
 			if (probe_disks(i, load_type, load_unit, load_slice, 
 			    load_partition) == 0)
 				break;
 		}
 
-		if ((load_type == -1 || (load_type & DEV_TYP_NET)) &&
+		if ((load_type == DEV_TYP_NONE || (load_type & DEV_TYP_NET)) &&
 		    strcmp(devsw[i]->dv_name, "net") == 0)
 			break;
 	}
