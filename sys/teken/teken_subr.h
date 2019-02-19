@@ -372,7 +372,7 @@ teken_subr_cursor_up(teken_t *t, unsigned int nrows)
 }
 
 static void
-teken_subr_set_cursor_style(teken_t *t, unsigned int style)
+teken_subr_set_cursor_style(teken_t *t __unused, unsigned int style __unused)
 {
 
 	/* TODO */
@@ -1337,8 +1337,11 @@ teken_subr_vertical_position_absolute(teken_t *t, unsigned int row)
 static void
 teken_subr_repeat_last_graphic_char(teken_t *t, unsigned int rpts)
 {
+	unsigned int max_repetitions;
 
+	max_repetitions = t->t_winsize.tp_row * t->t_winsize.tp_col;
+	if (rpts > max_repetitions)
+		rpts = max_repetitions;
 	for (; t->t_last != 0 && rpts > 0; rpts--)
 		teken_subr_regular_character(t, t->t_last);
 }
-
