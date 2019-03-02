@@ -95,6 +95,7 @@ struct at45d_softc
 	uint16_t		pagecount;
 	uint16_t		pageoffset;
 	uint16_t		pagesize;
+	void			*dummybuf;
 };
 
 #define	TSTATE_STOPPED	0
@@ -128,12 +129,16 @@ static int at45d_get_mfg_info(device_t dev, struct at45d_mfg_info *resp);
 static int at45d_get_status(device_t dev, uint8_t *status);
 static int at45d_wait_ready(device_t dev, uint8_t *status);
 
-#define	BUFFER_TRANSFER			0x53
-#define	BUFFER_COMPARE			0x60
+#define	PAGE_TO_BUFFER_TRANSFER		0x53
+#define	PAGE_TO_BUFFER_COMPARE		0x60
 #define	PROGRAM_THROUGH_BUFFER		0x82
 #define	MANUFACTURER_ID			0x9f
 #define	STATUS_REGISTER_READ		0xd7
 #define	CONTINUOUS_ARRAY_READ		0xe8
+
+#define	STATUS_READY			(1u << 7)
+#define	STATUS_CMPFAIL			(1u << 6)
+#define	STATUS_PAGE2N			(1u << 0)
 
 /*
  * Metadata for supported chips.
@@ -220,7 +225,7 @@ at45d_wait_ready(device_t dev, uint8_t *status)
 			err = ETIMEDOUT;
 		else
 			err = at45d_get_status(dev, status);
-	} while (err == 0 && (*status & 0x80) == 0);
+	} while (err == 0 && !(*status & STATUS_READY));
 	return (err);
 }
 
@@ -285,6 +290,7 @@ at45d_detach(device_t dev)
 	if (err == 0 && sc->taskstate == TSTATE_STOPPED) {
 		disk_destroy(sc->disk);
 		bioq_flush(&sc->bio_queue, NULL, ENXIO);
+		free(sc->dummybuf, M_DEVBUF);
 		AT45D_LOCK_DESTROY(sc);
 	}
 	return (err);
@@ -327,12 +333,14 @@ at45d_delayed_attach(void *xsc)
 
 	sc->pagecount = ident->pagecount;
 	sc->pageoffset = ident->pageoffset;
-	if (ident->pagesize2n != 0 && (status & 0x01) != 0) {
+	if (ident->pagesize2n != 0 && (status & STATUS_PAGE2N)) {
 		sc->pageoffset -= 1;
 		pagesize = ident->pagesize2n;
 	} else
 		pagesize = ident->pagesize;
 	sc->pagesize = pagesize;
+
+	sc->dummybuf = malloc(pagesize, M_DEVBUF, M_WAITOK | M_ZERO);
 
 	sc->disk = disk_alloc();
 	sc->disk->d_open = at45d_open;
@@ -373,6 +381,10 @@ static int
 at45d_getattr(struct bio *bp)
 {
 	struct at45d_softc *sc;
+
+	/*
+	 * This function exists to support geom_flashmap and fdt_slicer.
+	 */
 
 	if (bp->bio_disk == NULL || bp->bio_disk->d_drv1 == NULL)
 		return (ENXIO);
@@ -430,7 +442,7 @@ at45d_task(void *arg)
 			}
 			bp = bioq_takefirst(&sc->bio_queue);
 			if (bp == NULL)
-				msleep(sc, &sc->sc_mtx, PRIBIO, "jobqueue", 0);
+				msleep(sc, &sc->sc_mtx, PRIBIO, "at45dq", 0);
 		} while (bp == NULL);
 		AT45D_UNLOCK(sc);
 
@@ -444,11 +456,13 @@ at45d_task(void *arg)
 		case BIO_READ:
 			txBuf[0] = CONTINUOUS_ARRAY_READ;
 			cmd.tx_cmd_sz = cmd.rx_cmd_sz = 8;
-			cmd.tx_data = cmd.rx_data = buf;
+			cmd.tx_data = sc->dummybuf;
+			cmd.rx_data = buf;
 			break;
 		case BIO_WRITE:
 			cmd.tx_cmd_sz = cmd.rx_cmd_sz = 4;
-			cmd.tx_data = cmd.rx_data = buf;
+			cmd.tx_data = buf;
+			cmd.rx_data = sc->dummybuf;
 			if (resid + offset > sc->pagesize)
 				len = sc->pagesize - offset;
 			break;
@@ -467,14 +481,19 @@ at45d_task(void *arg)
 			}
 			addr = page << sc->pageoffset;
 			if (bp->bio_cmd == BIO_WRITE) {
+				/*
+				 * If writing less than a full page, transfer
+				 * the existing page to the buffer, so that our
+				 * PROGRAM_THROUGH_BUFFER below will preserve
+				 * the parts of the page we're not writing.
+				 */
 				if (len != sc->pagesize) {
-					txBuf[0] = BUFFER_TRANSFER;
+					txBuf[0] = PAGE_TO_BUFFER_TRANSFER;
 					txBuf[1] = ((addr >> 16) & 0xff);
 					txBuf[2] = ((addr >> 8) & 0xff);
 					txBuf[3] = 0;
 					cmd.tx_data_sz = cmd.rx_data_sz = 0;
-					err = SPIBUS_TRANSFER(pdev, dev,
-					    &cmd);
+					err = SPIBUS_TRANSFER(pdev, dev, &cmd);
 					if (err == 0)
 						err = at45d_wait_ready(dev,
 						    &status);
@@ -500,7 +519,7 @@ at45d_task(void *arg)
 			}
 			if (bp->bio_cmd == BIO_WRITE) {
 				addr = page << sc->pageoffset;
-				txBuf[0] = BUFFER_COMPARE;
+				txBuf[0] = PAGE_TO_BUFFER_COMPARE;
 				txBuf[1] = ((addr >> 16) & 0xff);
 				txBuf[2] = ((addr >> 8) & 0xff);
 				txBuf[3] = 0;
@@ -508,9 +527,9 @@ at45d_task(void *arg)
 				err = SPIBUS_TRANSFER(pdev, dev, &cmd);
 				if (err == 0)
 					err = at45d_wait_ready(dev, &status);
-				if (err != 0 || (status & 0x40) != 0) {
+				if (err != 0 || (status & STATUS_CMPFAIL)) {
 					device_printf(dev, "comparing page "
-					    "%d failed (status=0x%x)\n", addr,
+					    "%d failed (status=0x%x)\n", page,
 					    status);
 					berr = EIO;
 					goto out;
@@ -524,7 +543,10 @@ at45d_task(void *arg)
 				len = sc->pagesize;
 			else
 				len = resid;
-			cmd.tx_data = cmd.rx_data = buf;
+			if (bp->bio_cmd == BIO_READ)
+				cmd.rx_data = buf;
+			else
+				cmd.tx_data = buf;
 		}
  out:
 		if (berr != 0) {
