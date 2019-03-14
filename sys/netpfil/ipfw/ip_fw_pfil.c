@@ -85,7 +85,7 @@ VNET_DEFINE_STATIC(int, fwlink_enable) = 0;
 int ipfw_chg_hook(SYSCTL_HANDLER_ARGS);
 
 /* Forward declarations. */
-static int ipfw_divert(struct mbuf **, int, struct ipfw_rule_ref *, int);
+static int ipfw_divert(struct mbuf **, struct ip_fw_args *, bool);
 
 #ifdef SYSCTL_NODE
 
@@ -118,7 +118,7 @@ SYSEND
  * The packet may be consumed.
  */
 static pfil_return_t
-ipfw_check_packet(struct mbuf **m0, struct ifnet *ifp, int dir,
+ipfw_check_packet(struct mbuf **m0, struct ifnet *ifp, int flags,
     void *ruleset __unused, struct inpcb *inp)
 {
 	struct ip_fw_args args;
@@ -126,9 +126,7 @@ ipfw_check_packet(struct mbuf **m0, struct ifnet *ifp, int dir,
 	pfil_return_t ret;
 	int ipfw;
 
-	/* convert dir to IPFW values */
-	dir = (dir & PFIL_IN) ? DIR_IN : DIR_OUT;
-	args.flags = 0;
+	args.flags = (flags & PFIL_IN) ? IPFW_ARGS_IN : IPFW_ARGS_OUT;
 again:
 	/*
 	 * extract and remove the tag if present. If we are left
@@ -144,7 +142,7 @@ again:
 	}
 
 	args.m = *m0;
-	args.oif = dir == DIR_OUT ? ifp : NULL;
+	args.ifp = ifp;
 	args.inp = inp;
 
 	ipfw = ipfw_chk(&args);
@@ -198,7 +196,7 @@ again:
 		 * m_tag_find. Outgoing packets may be tagged, so we
 		 * reuse the tag if present.
 		 */
-		tag = (dir == DIR_IN) ? NULL :
+		tag = (flags & PFIL_IN) ? NULL :
 			m_tag_find(*m0, PACKET_TAG_IPFORWARD, NULL);
 		if (tag != NULL) {
 			m_tag_unlink(*m0, tag);
@@ -255,10 +253,8 @@ again:
 			break;
 		}
 		MPASS(args.flags & IPFW_ARGS_REF);
-		if (mtod(*m0, struct ip *)->ip_v == 4)
-			(void )ip_dn_io_ptr(m0, dir, &args);
-		else if (mtod(*m0, struct ip *)->ip_v == 6)
-			(void )ip_dn_io_ptr(m0, dir | PROTO_IPV6, &args);
+		if (args.flags & (IPFW_ARGS_IP4 | IPFW_ARGS_IP6))
+			(void )ip_dn_io_ptr(m0, &args);
 		else {
 			ret = PFIL_DROPPED;
 			break;
@@ -282,8 +278,7 @@ again:
 			break;
 		}
 		MPASS(args.flags & IPFW_ARGS_REF);
-		(void )ipfw_divert(m0, dir, &args.rule,
-			(ipfw == IP_FW_TEE) ? 1 : 0);
+		(void )ipfw_divert(m0, &args, ipfw == IP_FW_TEE);
 		/* continue processing for the original packet (tee). */
 		if (*m0)
 			goto again;
@@ -297,8 +292,7 @@ again:
 			break;
 		}
 		MPASS(args.flags & IPFW_ARGS_REF);
-		(void )ng_ipfw_input_p(m0, dir, &args,
-			(ipfw == IP_FW_NGTEE) ? 1 : 0);
+		(void )ng_ipfw_input_p(m0, &args, ipfw == IP_FW_NGTEE);
 		if (ipfw == IP_FW_NGTEE) /* ignore errors for NGTEE */
 			goto again;	/* continue with packet */
 		ret = PFIL_CONSUMED;
@@ -334,7 +328,7 @@ again:
  * ipfw processing for ethernet packets (in and out).
  */
 static pfil_return_t
-ipfw_check_frame(struct mbuf **m0, struct ifnet *ifp, int dir,
+ipfw_check_frame(struct mbuf **m0, struct ifnet *ifp, int flags,
     void *ruleset __unused, struct inpcb *inp)
 {
 	struct ip_fw_args args;
@@ -346,6 +340,7 @@ ipfw_check_frame(struct mbuf **m0, struct ifnet *ifp, int dir,
 	int i;
 
 	args.flags = IPFW_ARGS_ETHER;
+	args.flags |= (flags & PFIL_IN) ? IPFW_ARGS_IN : IPFW_ARGS_OUT;
 again:
 	/* fetch start point from rule, if any.  remove the tag if present. */
 	mtag = m_tag_locate(*m0, MTAG_IPFW_RULE, 0, NULL);
@@ -372,7 +367,7 @@ again:
 	m_adj(m, ETHER_HDR_LEN);	/* strip ethernet header */
 
 	args.m = m;		/* the packet we are looking at		*/
-	args.oif = dir & PFIL_OUT ? ifp: NULL;	/* destination, if any	*/
+	args.ifp = ifp;
 	args.eh = &save_eh;	/* MAC header for bridged/MAC packets	*/
 	args.inp = inp;	/* used by ipfw uid/gid/jail rules	*/
 	i = ipfw_chk(&args);
@@ -409,9 +404,8 @@ again:
 			break;
 		}
 		*m0 = NULL;
-		dir = (dir & PFIL_IN) ? DIR_IN : DIR_OUT;
 		MPASS(args.flags & IPFW_ARGS_REF);
-		ip_dn_io_ptr(&m, dir | PROTO_LAYER2, &args);
+		ip_dn_io_ptr(&m, &args);
 		return (PFIL_CONSUMED);
 
 	case IP_FW_NGTEE:
@@ -421,8 +415,7 @@ again:
 			break;
 		}
 		MPASS(args.flags & IPFW_ARGS_REF);
-		(void )ng_ipfw_input_p(m0, (dir & PFIL_IN) ? DIR_IN : DIR_OUT,
-			&args, (i == IP_FW_NGTEE) ? 1 : 0);
+		(void )ng_ipfw_input_p(m0, &args, i == IP_FW_NGTEE);
 		if (i == IP_FW_NGTEE) /* ignore errors for NGTEE */
 			goto again;	/* continue with packet */
 		ret = PFIL_CONSUMED;
@@ -443,8 +436,7 @@ again:
 
 /* do the divert, return 1 on error 0 on success */
 static int
-ipfw_divert(struct mbuf **m0, int incoming, struct ipfw_rule_ref *rule,
-	int tee)
+ipfw_divert(struct mbuf **m0, struct ip_fw_args *args, bool tee)
 {
 	/*
 	 * ipfw_chk() has already tagged the packet with the divert tag.
@@ -456,7 +448,7 @@ ipfw_divert(struct mbuf **m0, int incoming, struct ipfw_rule_ref *rule,
 	struct m_tag *tag;
 
 	/* Cloning needed for tee? */
-	if (tee == 0) {
+	if (tee == false) {
 		clone = *m0;	/* use the original mbuf */
 		*m0 = NULL;
 	} else {
@@ -476,7 +468,7 @@ ipfw_divert(struct mbuf **m0, int incoming, struct ipfw_rule_ref *rule,
 	 * Note that we now have the 'reass' ipfw option so if we care
 	 * we can do it before a 'tee'.
 	 */
-	if (!tee) switch (ip->ip_v) {
+	if (tee == false) switch (ip->ip_v) {
 	case IPVERSION:
 	    if (ntohs(ip->ip_off) & (IP_MF | IP_OFFMASK)) {
 		int hlen;
@@ -525,11 +517,11 @@ ipfw_divert(struct mbuf **m0, int incoming, struct ipfw_rule_ref *rule,
 		FREE_PKT(clone);
 		return 1;
 	}
-	*((struct ipfw_rule_ref *)(tag+1)) = *rule;
+	*((struct ipfw_rule_ref *)(tag+1)) = args->rule;
 	m_tag_prepend(clone, tag);
 
 	/* Do the dirty job... */
-	ip_divert_ptr(clone, incoming);
+	ip_divert_ptr(clone, args->flags & IPFW_ARGS_IN);
 	return 0;
 }
 
