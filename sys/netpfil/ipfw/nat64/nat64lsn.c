@@ -72,12 +72,10 @@ __FBSDID("$FreeBSD$");
 
 MALLOC_DEFINE(M_NAT64LSN, "NAT64LSN", "NAT64LSN");
 
-static epoch_t nat64lsn_epoch;
-#define	NAT64LSN_EPOCH_ENTER(et)  epoch_enter_preempt(nat64lsn_epoch, &(et))
-#define	NAT64LSN_EPOCH_EXIT(et)   epoch_exit_preempt(nat64lsn_epoch, &(et))
-#define	NAT64LSN_EPOCH_WAIT()     epoch_wait_preempt(nat64lsn_epoch)
-#define	NAT64LSN_EPOCH_ASSERT()   MPASS(in_epoch(nat64lsn_epoch))
-#define	NAT64LSN_EPOCH_CALL(c, f) epoch_call(nat64lsn_epoch, (c), (f))
+#define	NAT64LSN_EPOCH_ENTER(et)  NET_EPOCH_ENTER(et)
+#define	NAT64LSN_EPOCH_EXIT(et)   NET_EPOCH_EXIT(et)
+#define	NAT64LSN_EPOCH_ASSERT()   NET_EPOCH_ASSERT()
+#define	NAT64LSN_EPOCH_CALL(c, f) epoch_call(net_epoch_preempt, (c), (f))
 
 static uma_zone_t nat64lsn_host_zone;
 static uma_zone_t nat64lsn_pgchunk_zone;
@@ -1516,7 +1514,6 @@ int
 ipfw_nat64lsn(struct ip_fw_chain *ch, struct ip_fw_args *args,
     ipfw_insn *cmd, int *done)
 {
-	struct epoch_tracker et;
 	struct nat64lsn_cfg *cfg;
 	ipfw_insn *icmd;
 	int ret;
@@ -1533,7 +1530,6 @@ ipfw_nat64lsn(struct ip_fw_chain *ch, struct ip_fw_args *args,
 
 	*done = 1;	/* terminate the search */
 
-	NAT64LSN_EPOCH_ENTER(et);
 	switch (args->f_id.addr_type) {
 	case 4:
 		ret = nat64lsn_translate4(cfg, &args->f_id, &args->m);
@@ -1553,7 +1549,6 @@ ipfw_nat64lsn(struct ip_fw_chain *ch, struct ip_fw_args *args,
 	default:
 		ret = cfg->nomatch_verdict;
 	}
-	NAT64LSN_EPOCH_EXIT(et);
 
 	if (ret != IP_FW_PASS && args->m != NULL) {
 		m_freem(args->m);
@@ -1577,8 +1572,6 @@ nat64lsn_state_ctor(void *mem, int size, void *arg, int flags)
 void
 nat64lsn_init_internal(void)
 {
-
-	nat64lsn_epoch = epoch_alloc(EPOCH_PREEMPT);
 
 	nat64lsn_host_zone = uma_zcreate("NAT64LSN hosts",
 	    sizeof(struct nat64lsn_host), NULL, NULL, NULL, NULL,
@@ -1606,8 +1599,6 @@ nat64lsn_uninit_internal(void)
 {
 
 	/* XXX: epoch_task drain */
-	epoch_free(nat64lsn_epoch);
-
 	JQUEUE_LOCK_DESTROY();
 	uma_zdestroy(nat64lsn_host_zone);
 	uma_zdestroy(nat64lsn_pgchunk_zone);
