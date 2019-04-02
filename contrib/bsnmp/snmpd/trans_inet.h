@@ -1,9 +1,9 @@
-/*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+/*
+ * Copyright (c) 2018
+ *	Hartmut Brandt.
+ *	All rights reserved.
  *
- * Copyright (c) 1998 David E. O'Brien
- *               2015 Yoshihiro Ota
- * All rights reserved.
+ * Author: Harti Brandt <harti@freebsd.org>
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -14,10 +14,10 @@
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
  *
- * THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+ * THIS SOFTWARE IS PROVIDED BY AUTHOR AND CONTRIBUTORS ``AS IS'' AND
  * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
  * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
+ * ARE DISCLAIMED.  IN NO EVENT SHALL AUTHOR OR CONTRIBUTORS BE LIABLE
  * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
  * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
@@ -26,21 +26,13 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  *
- * $FreeBSD$
+ * $Id$
  */
 
-#ifndef DEVS_H
-#define DEVS_H
+#ifndef trans_inet_h_1530971397
+#define trans_inet_h_1530971397
 
-#include <devstat.h>
-
-int dsinit(int);
-void dsgetinfo(struct statinfo *);
-int dscmd(const char *, const char *, int, struct statinfo *);
-
-void dslabel(int, int, int);
-void dsshow(int, int, int, struct statinfo *, struct statinfo *);
-
-extern struct statinfo cur_dev, last_dev, run_dev;
+/* transport declaration */
+extern const struct transport_def inet_trans;
 
 #endif
